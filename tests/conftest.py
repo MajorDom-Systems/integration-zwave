@@ -28,20 +28,20 @@ from majordom_integration_sdk.schemas.parameter import (
 )
 from majordom_integration_sdk.testing import build_test_dependencies
 
-from integration_template import ExampleController
+from majordom_zwave import ZwaveController
 
-INTEGRATION = "example"
+INTEGRATION = "Zwave"
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def deps() -> AbstractController.Dependencies:
     """SDK-provided test dependencies (recording output + in-memory repo + fake discovery)."""
     return build_test_dependencies(integration=INTEGRATION)
 
 
-@pytest.fixture
-def controller(deps: AbstractController.Dependencies) -> ExampleController:
-    return ExampleController(deps)
+@pytest.fixture(scope="session")
+def controller(deps: AbstractController.Dependencies) -> ZwaveController:
+    return ZwaveController(deps)
 
 
 # A virtual / simulated device — a fake endpoint that speaks your protocol in-process (no
@@ -52,7 +52,7 @@ def controller(deps: AbstractController.Dependencies) -> ExampleController:
 #
 # @pytest.fixture
 # def virtual_device():
-#     dev = VirtualExampleDevice()  # your in-process fake
+#     dev = VirtualZwaveDevice()  # your in-process fake
 #     dev.start()
 #     yield dev
 #     dev.stop()
@@ -73,32 +73,28 @@ def discovery() -> Discovery:
         expected_credentials_options=[CredentialsType.none],
         transport="wifi",
         device_manufacturer="ACME",
-        device_name="Example Lamp",
+        device_name="Zwave Lamp",
         device_category=None,
         device_icon=None,
     )
 
 
 @pytest.fixture
-async def provisional_device(deps: AbstractController.Dependencies, discovery: Discovery) -> DeviceState:
-    """The device as it exists when the Hub calls `pair_device`.
+def make_provisional_device(deps: AbstractController.Dependencies):
+    async def _factory(discovery: Discovery) -> DeviceState:
+        device = DeviceState(
+            id=discovery.id,
+            name="Living Room Lamp",
+            room_id=uuid4(),
+            transport=discovery.transport,
+            integration=INTEGRATION,
+            manufacturer=discovery.device_manufacturer,
+            parameters=[],
+        )
+        await _seed(deps, device)
+        return device
 
-    Before pairing, the Hub has already created the row from the user's input: name and room
-    mapped, and its id set to the discovery's (still provisional) id — but no parameters yet;
-    the controller discovers/maps those while pairing. After pairing the controller reports
-    the real device id and the Hub reconciles the row. We seed the repository to match.
-    """
-    device = DeviceState(
-        id=discovery.id,  # provisional id == discovery id, until pairing assigns the real one
-        name="Living Room Lamp",  # mapped by the Hub from the user's input
-        room_id=uuid4(),
-        transport=discovery.transport,
-        integration=INTEGRATION,
-        manufacturer=discovery.device_manufacturer,
-        parameters=[],
-    )
-    await _seed(deps, device)
-    return device
+    return _factory
 
 
 @pytest.fixture
