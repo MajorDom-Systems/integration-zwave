@@ -9,6 +9,7 @@ from zwave_js_server.const import CommandClass, InclusionStrategy, NodeStatus, S
 from zwave_js_server.model.controller.inclusion_and_provisioning import InclusionGrant
 from zwave_js_server.model.node import Node
 from zwave_js_server.model.value import Value
+from zwave_js_server.model.utils import async_parse_qr_code_string
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
@@ -30,6 +31,7 @@ from .zwave_spec import IDENTIFY_INDICATOR_ID
 
 log = logging.getLogger(__name__)
 
+#TODO: заполнить ридми под интеграцию по примерам меттера и зигби
 
 class ZwaveController(AbstractController):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
@@ -146,11 +148,30 @@ class ZwaveController(AbstractController):
     # Hub -> device operations
     # -------------------------------------------------------------------------
 
-    async def start_pairing_window(self, duration_sec: int) -> None:
+    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None) -> None:
         self._require_client()
         controller = self._zwave_client.driver.controller
-        await controller.async_begin_inclusion(InclusionStrategy.DEFAULT)
-        log.debug("[PAIRING] inclusion window opened for %ds", duration_sec)
+
+        if credentials and credentials.type is CredentialsType.qr:
+            if not credentials.value:
+                raise ZwaveUnexpectedError("QR credentials provided without QR data")
+            provisioning_info = await async_parse_qr_code_string(self._zwave_client, credentials.value)
+            await controller.async_begin_inclusion(InclusionStrategy.SECURITY_S2, provisioning=provisioning_info)
+            log.debug("[PAIRING] inclusion window opened for %ds via QR", duration_sec)
+
+        elif credentials and credentials.type is CredentialsType.code:
+            if not credentials.value:
+                raise ZwaveUnexpectedError("PIN credentials provided without a value")
+            await controller.async_begin_inclusion(InclusionStrategy.SECURITY_S2, dsk=credentials.value)
+            log.debug("[PAIRING] inclusion window opened for %ds with pre-supplied PIN", duration_sec)
+
+        elif credentials and credentials.type is CredentialsType.secret:
+            raise ZwaveUnexpectedError("Z-Wave does not support secret-based pairing credentials")
+
+        else:
+            await controller.async_begin_inclusion(InclusionStrategy.DEFAULT)
+            log.debug("[PAIRING] inclusion window opened for %ds", duration_sec)
+
         self._create_task(self._close_pairing_window(duration_sec))
 
     async def pair_device(self, discovery: Discovery, credentials: ProvidedCredentials | None) -> UUID:
@@ -213,6 +234,15 @@ class ZwaveController(AbstractController):
             await controller.async_remove_failed_node(zwave_node)
         else:
             # Live node: requires interactive exclusion, confirmed by the device itself.
+            async with self.dependencies.make_device_repository() as device_repository:
+                stored = await device_repository.get(device.id, as_=ZwaveDevice)
+                if stored:
+                    stored.last_error = (
+                        "Trigger exclusion mode on the device manually "
+                        "(see manufacturer instructions) to complete removal"
+                    )
+                    await device_repository.save(stored, device.id)
+
             removed = asyncio.Event()
 
             def _on_node_removed(data: dict) -> None:
@@ -250,11 +280,39 @@ class ZwaveController(AbstractController):
             ),
             None,
         )
-        if indicator_value is None:
-            raise ZwaveUnexpectedError(f"Node {zwave_node.node_id} does not support the Identify indicator")
+        if indicator_value is not None:
+            await zwave_node.async_set_value(indicator_value, 0xFF)
+            log.debug("[IDENTIFY] node_id=%s via Indicator CC", zwave_node.node_id)
+            return
 
-        await zwave_node.async_set_value(indicator_value, 0xFF)
-        log.debug("[IDENTIFY] node_id=%s", zwave_node.node_id)
+        switch_value = next(
+            (
+                v
+                for v in zwave_node.values.values()
+                if v.command_class in (CommandClass.SWITCH_BINARY, CommandClass.SWITCH_MULTILEVEL)
+                and v.property_ == "targetValue"
+            ),
+            None,
+        )
+        if switch_value is None:
+            raise ZwaveUnexpectedError(
+                f"Node {zwave_node.node_id} supports neither Indicator CC nor a switch to blink"
+            )
+
+        current_value = zwave_node.values.get(
+            switch_value.value_id.replace("targetValue", "currentValue")
+        )
+        restore_value = current_value.value if current_value and current_value.value is not None else 0
+
+        on_value = 0xFF if switch_value.command_class == CommandClass.SWITCH_BINARY else 99
+        for _ in range(10):
+            await zwave_node.async_set_value(switch_value, 0)
+            await asyncio.sleep(0.6)
+            await zwave_node.async_set_value(switch_value, on_value)
+            await asyncio.sleep(0.6)
+
+        await zwave_node.async_set_value(switch_value, restore_value)
+        log.debug("[IDENTIFY] node_id=%s via switch blink fallback", zwave_node.node_id)
 
     async def fetch(self, device: ZwaveDevice):
         self._require_client()
