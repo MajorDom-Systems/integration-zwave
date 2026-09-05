@@ -12,71 +12,24 @@
   </picture>
 </a>
 
-<!-- ┌───────────────────────────────────────────────────────────────────────────┐
-     │ USING THIS TEMPLATE — delete everything down to the "DELETE ABOVE" line      │
-     │ once your integration repo is set up. What's left below is your own README.  │
-     └───────────────────────────────────────────────────────────────────────────┘ -->
+# integration-zwave
 
-# Creating a new MajorDom integration from this template
-
-Click **Use this template → Create a new repository** (name it `integration-<protocol>`,
-e.g. `integration-hue`), then:
-
-**1. Rename the placeholders** (find & replace across the repo)
-- `integration-template` → your distribution name, by convention `majordom-<protocol>`
-  (hyphens): in `pyproject.toml` (`[project].name`) and `.github/workflows/release.yml`
-  (`pypi-package-name`).
-- `integration_template` → your import name `majordom_<protocol>` (underscores): the
-  `integration_template/` directory, plus the `--cov=` and `packages` references in
-  `pyproject.toml`.
-- Rename `ExampleController` and fill in `integration_template/controller.py` with real
-  protocol logic. `tests/test_controller.py` is prefilled to fail until you do — work the
-  **Progress** checklist below and tick items off as your CI goes green.
-- In `.github/workflows/test.yml`, delete the `template-selfcheck` job and the `if:` guard
-  on the `test` job — they exist only to keep the *template* repo green and aren't wanted in
-  a real integration.
-- Fill in the **About this integration** section below (it doubles as your PR summary — a
-  reviewer reads the checklist to see what's actually implemented).
-
-**2. Install + pre-commit hook**
-```sh
-pip install poetry poethepoet && poe install
-```
-
-**3. Create the `develop` branch**
-```sh
-git checkout -b develop && git push origin develop
-```
-
-**4. GitHub repo settings** — same as any package repo built on the shared workflows:
-
-- **General** → enable **Allow auto-merge**;  
-- **Branches** → protect `master` (require the `test / check` status, restrict push to `github-actions[bot]`) and `develop` (require `test / check`);  
-- **Environments** → create `release` (deployment branch `develop` only, required reviewer). Then configure PyPI trusted publishing for your package (Owner = the GitHub user or org that owns **this** repo, Repository = this repo, Workflow `release.yml`, Environment `release`).  
-
-The reusable CI/CD lives in [ParkerIndustries/workflows](https://github.com/ParkerIndustries/workflows).
-
-<!-- ─────────────────────────────── DELETE ABOVE ─────────────────────────────── -->
-
-# integration-template
-
-A [MajorDom](https://majordom.io) integration — bridges the Example protocol into the
-MajorDom language.
+A [MajorDom](https://majordom.io) integration — bridges **Z-Wave** devices into the MajorDom
+language.
 
 Built for the **MajorDom Hub**, but it doesn't need it: this is a standalone, standardized
-library for the Example protocol that you can use on its own (see **Run it standalone** below).
-Built on the [MajorDom Integration SDK](https://github.com/MajorDom-Systems/integration-sdk).
-The integration's entry point is a `Controller` (`integration_template/controller.py`) that the
-Hub — or the SDK's dev runner — instantiates and drives through its lifecycle: discovery →
-pairing → commands → teardown.
+library for Z-Wave that you can use on its own (see **Run it standalone** below). Built on the
+[MajorDom Integration SDK](https://github.com/MajorDom-Systems/integration-sdk). The entry point
+is `ZwaveController` (`majordom_zwave/controller.py`), which the Hub — or the SDK's dev runner —
+instantiates and drives through its lifecycle: pairing → commands → teardown.
 
 - **Other protocols:** browse the [MajorDom integrations](https://github.com/orgs/MajorDom-Systems/repositories?q=integration-).
 - **Create your own:** start from the [integration template](https://github.com/MajorDom-Systems/integration-template).
 
 ## Documentation
 
-Full integration-author docs — the controller lifecycle, data models, storing data,
-discovery, and a worked example — live at **[docs.majordom.io](https://docs.majordom.io/device-integration)**.
+Full integration-author docs — the controller lifecycle, data models, storing data, discovery,
+and a worked example — live at **[docs.majordom.io](https://docs.majordom.io/device-integration)**.
 
 ## Development
 
@@ -89,124 +42,121 @@ poetry install && poetry run poe install
 | `poe check` | Full quality pipeline (ruff, ty, pytest, poetry build/check) |
 | `poe check --ci` | Same, plus `git diff --exit-code` |
 
-Work lands on `develop`; `master` is protected and released via **Actions → Release**.
-Tests drive the controller with the SDK's test doubles (`majordom_integration_sdk.testing`)
-against a virtual/simulated device — see `tests/`.
+Work lands on `develop`; `master` is protected and released via **Actions → Release**. Tests drive
+the controller with the SDK's test doubles against an in-memory `zwave-js-server-python`
+stub — no real server, radio, or Z-Wave stick required (see `tests/`).
 
 ## Run it standalone (without the Hub)
 
-Your integration is a standalone library — import it into another app, or run **just this
+`majordom-zwave` is a standalone library — import it into your own app, or run **just this
 integration** interactively (discover, pair, control, and inspect devices from a prompt) with no Hub.
-Note here whatever prerequisites your protocol needs to run on its own (a broker, a radio, a local
-server, …).
+It needs a reachable `zwave-js-server` instance (see below).
 
 See **[Standalone mode](https://docs.majordom.io/device-integration/standalone)** for the interactive
 CLI, watch mode, and the programmatic API.
 
+## Connecting to zwave-js-server
+
+Unlike a radio-based integration, this one never talks to the Z-Wave stick directly. It connects
+over WebSocket, via [`zwave-js-server-python`](https://github.com/home-assistant-libs/zwave-js-server-python),
+to a running **[zwave-js-server](https://github.com/zwave-js/zwave-js-server)** process (Node.js) —
+the same server Home Assistant's Z-Wave JS integration uses. `zwave-js-server` is what actually owns
+the serial connection to the Z-Wave USB controller and speaks the Z-Wave protocol; this integration
+just talks JSON over a WebSocket to it.
+
+- Run `zwave-js-server` yourself (commonly via Docker, `ghcr.io/zwave-js/zwave-js-server`) on
+  whatever machine has the Z-Wave USB controller attached.
+- Point this integration at it with the `ZWAVE_SERVER_URL` environment variable
+  (e.g. `ws://localhost:3000`) — see `majordom_zwave/config.py`.
+
 ## About this integration
 
-<!-- Fill this in. It's your PR summary — keep the checklist current so a reviewer sees at
-     a glance what works. -->
-
-- **Protocol / platform:** _e.g. Philips Hue (Zigbee via a bridge)_
-- **Transport(s):** _wifi / ble / zigbee / …_
-- **Supported devices:** _…_
-- **Credentials needed to pair:** _none / code / secret / qr_
+- **Protocol / platform:** Z-Wave, via [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
+  / [`zwave-js-server-python`](https://github.com/home-assistant-libs/zwave-js-server-python).
+- **Transport(s):** Z-Wave (sub-GHz RF mesh).
+- **Supported devices:** any Z-Wave / Z-Wave Plus device exposing standard Command Classes
+  (Binary/Multilevel Switch, Indicator, etc.) that Z-Wave JS supports.
+- **Credentials needed to pair:** `none` (S0 / unauthenticated inclusion), `code` (S2 PIN), or
+  `qr` (S2 SmartStart / DSK QR code). `secret` is not supported.
 
 ### Required harness
 
-<!-- EXAMPLE — replace with your integration's real requirements (delete rows that don't
-     apply). External things this integration needs to run, beyond `pip install`, so a
-     deployment knows what to provide. -->
-
-- **Hardware adapters:** _e.g. an 802.15.4 radio (SkyConnect / a Thread or Zigbee dongle), a
-  USB serial gateway …_ — the Hub assigns OS device paths through
-  `dependencies.hardware_interfaces` (e.g. `/dev/ttyACM0`).
-- **Third-party software services:** _e.g. an OpenThread Border Router (OTBR), a vendor
-  bridge/hub, an MQTT broker, a matter-server instance …_ — what must be running and reachable.
-- **OS / permissions:** _e.g. Bluetooth access, host networking, mDNS/SSDP on the LAN …_
+- **Hardware adapters:** a Z-Wave USB controller (e.g. Aeotec Z-Stick, Zooz ZST10) — but it's
+  attached to whatever host runs `zwave-js-server`, not necessarily the Hub. This integration
+  doesn't use `dependencies.hardware_interfaces`; the radio is abstracted behind the server.
+- **Third-party software services:** [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
+  (Node.js) must be running and reachable at `ZWAVE_SERVER_URL`.
+- **OS / permissions:** network reachability (TCP) to the `zwave-js-server` host:port. No special
+  permissions needed on the Hub's own host.
 
 ### Protocol stack
 
-Every integration is two things stacked: the **MajorDom integration layer** — mapping the
-protocol to MajorDom's domain model — sitting on top of the **protocol stack** it bridges. The
-top layer is *always this repo*. How much of the stack *below* it is also this repo's code
-varies: some integrations only map an existing application-level protocol (a vendor library / the
-OS / the harness provides everything under them), while others implement the protocol themselves,
-down to raw UDP or even a custom radio.
-
-<!-- EXAMPLE — the table below is a Matter-over-Thread illustration; replace every row with your
-     own stack. Mark which layers are THIS repo's code vs. a library, the OS, or the harness —
-     it sets the scope of what the integration owns. Keep only the rows that apply. -->
-
 | Layer | Protocol | Implemented by |
 |-------|----------|----------------|
-| **MajorDom integration** | maps the protocol ↔ MajorDom domain model | **this repo, always** |
-| Application (7) | _Matter clusters / data model_ | this integration (via `chip` lib) |
-| Session (5) | _CASE / PASE secure session_ | library |
-| Transport (4) | _UDP_ | OS |
-| Network (3) | _IPv6 · 6LoWPAN_ | OS · OTBR (harness) |
-| Data link / Physical (1–2) | _Thread · IEEE 802.15.4_ | radio adapter (harness) |
-
-If your integration implements the protocol itself (no vendor library), more of the lower rows
-become **this integration** — a custom-radio integration can own everything from the application
-layer down to the physical.
+| **MajorDom integration** | maps Z-Wave devices/values ↔ MajorDom domain model | **this repo, always** |
+| Z-Wave JS Server API | `zwave-js-server`'s WebSocket/JSON-RPC protocol | library (`zwave-js-server-python`) |
+| Application | Z-Wave Command Classes (CC) | `zwave-js-server` (external Node.js service) |
+| Network / MAC / PHY | Z-Wave mesh, sub-GHz RF | Z-Wave USB controller + its driver (harness) |
 
 ### Progress
 
-Two checklists — this README is where you track them (tick items as you implement them and the
-matching test in `tests/` goes green). The docs explain the *why* behind each item:
-[Implementation Checklist](https://docs.majordom.io/device-integration) (gets it working) and
-[Quality Checklist](https://docs.majordom.io/device-integration/quality) (gets it releasable).
-
 **Implementation** — makes the integration functional:
 
-- [ ] Discovery services registered via `self.dependencies.zeroconf_discovery_service`, `ssdp_discovery_service`, and/or `ble_discovery_service` as appropriate; cancel closures saved and called in `stop`
-- [ ] Discovery service listeners fire when devices are found, and the controller calls `self.dependencies.output.controller_did_receive_discovery`
-- [ ] Discovery of devices already paired to the Hub on reconnect, e.g. after a reboot (`self.dependencies.output.controller_did_connect_device` is called)
-- [ ] `start_pairing_window` is implemented but only if the protocol requires an explicit scan (like zigbee)
-- [ ] Device pairing 
-- [ ] Device schema is properly mapped: device info, parameter list, and each parameter's metadata are translated to MajorDom's domain model
-- [ ] Hub → Device control (`send_command` is implemented)
-- [ ] Device → Hub event subscription (`self.dependencies.output.controller_did_receive_events` is called on incoming events)
-- [ ] `identify` is implemented
-- [ ] `unpair` is implemented
-- [ ] `fetch` is implemented
-- [ ] Paired devices going offline/coming back online *while the Hub is running* (not just on reboot) — set `device.available` accordingly (report `controller_did_lose_device`), and clear/set `last_error` to match
-- [ ] Graceful shutdown in `stop`, cancelling any running tasks, discovery stopped, all connections closed
-- [ ] Tests pass against a virtual/simulated device (`tests/test_controller.py`)
-- [ ] README fully filled in: delete the template-setup section above, complete **About this integration**, **Required harness**, **Protocol stack**, and **Notes** with real content
+- [x] Discovery of joining devices via `zwave-js-server`'s `"node added"` event; also reconciles
+      nodes already on the network but not yet claimed (e.g. after a Hub restart) —
+      `controller_did_receive_discovery` called
+- [ ] Discovery of already-paired devices on reconnect — currently `start()` marks known devices
+      available internally on startup without going through `controller_did_connect_device` (see Notes)
+- [x] `start_pairing_window` (default S0, S2 PIN, S2 QR/SmartStart, auto-grant of requested
+      security classes with no user prompt)
+- [x] Device pairing
+- [x] Device schema mapped (via `ZwaveMapper`: values → parameters, role/visibility/units)
+- [x] Hub → Device control (`send_command`)
+- [x] Device → Hub event subscription (`controller_did_receive_events` on `"value updated"`)
+- [x] `identify` (Indicator CC, falls back to blinking a Binary/Multilevel Switch)
+- [x] `unpair` (failed-node removal, or live interactive exclusion confirmed by the device)
+- [x] `fetch`
+- [x] Availability tracking while running (`"dead"`/`"alive"` → `controller_did_lose_device` /
+      `controller_did_connect_device`) — `last_error` isn't set/cleared on these specific
+      transitions though (see Notes)
+- [x] Graceful shutdown in `stop` (tasks cancelled, client disconnected, session closed)
+- [x] Tests pass against a virtual/simulated device (`tests/test_controller.py`)
 
 **Quality** — makes it reliable and maintainable (the bar for release):
 
-- [ ] **Recovers automatically** from connection loss / offline device / restarted backend — retried with backoff, no manual restart
-- [ ] **No exception escapes the controller** — every background task, subscription loop, and callback catches its own errors; nothing raised into `self.dependencies.output.*`
-- [ ] **Failures are surfaced, not raised** — logged once (no spam) and reflected on the device (`available` / `last_error`), cleared on recovery
-- [ ] **Re-authenticates automatically** when credentials expire/are rejected (if the protocol uses credentials)
-- [ ] **Fully asynchronous** — no blocking I/O on the event loop; heavy/blocking work runs off-loop
-- [ ] **Stable identity** — device and parameter UUIDs derived through the SDK helpers, identical across restarts/re-pairs
-- [ ] **End-to-end tests** drive pair → command → fetch → events → `unpair` against a virtual device (`majordom_integration_sdk.testing`)
-- [ ] **Failure paths tested** — offline device, transport error, rejected credentials degrade gracefully (no raise)
-- [ ] **Broad device coverage** where the protocol has many device/parameter types (a virtual-device catalogue in CI is ideal)
-- [ ] **Fully typed** (`ty`, no package-wide ignores) and **clean** (`poe check`) with no warnings
-- [ ] **Readable & structured** — conversion logic in a mapper, models separated, comments where intent isn't obvious
-- [ ] **Efficient** — subscriptions over polling; batch/chunk reads; no redundant work
-- [ ] **Diagnosable** — logging at the right levels to debug a device problem from logs alone
-- [ ] **Rich parameter metadata** — correct `visibility` per parameter and a sensible `main_parameter`, so the app presents a clean control-center action and a tidy parameter list ([Parameter UX](https://docs.majordom.io/device-integration/parameter-ux))
-- [ ] **Owned** — a listed maintainer who keeps it working as the protocol/library evolve
-- [ ] _nice-to-have:_ localizable naming · firmware/software updates (where supported) · user-facing supported-device docs
+- [ ] **Recovers automatically** from connection loss / offline device / restarted backend — no
+      reconnect/backoff around `Client.connect()`/`listen()` yet
+- [ ] **No exception escapes the controller** — event handlers (`_node_added`, `_value_updated`,
+      `_set_availability`, `_grant_security_classes`) run via fire-and-forget tasks with no
+      individual `try`/`except`; an exception there surfaces only as an unretrieved task exception
+- [ ] **Failures are surfaced, not raised** — done in a couple of places (reconnect-missing,
+      pending exclusion) but not consistently across all paths
+- [ ] **Re-authenticates automatically** — not applicable to Z-Wave (no expiring credential concept)
+- [x] **Fully asynchronous** — no blocking I/O found on the event loop
+- [x] **Stable identity** — device/parameter UUIDs derived via `ZwaveMapper`'s SDK-backed helpers
+- [x] **End-to-end tests** drive pair → command → fetch → events → `unpair` against a virtual device
+- [ ] **Failure paths tested** — offline device / transport error / rejected credentials not covered yet
+- [ ] **Broad device coverage** — only a single virtual Binary Switch device is exercised in CI
+- [ ] **Fully typed** (`ty`) and **clean** (`poe check`) — TODO: confirm with a clean `poe check` run
+- [x] **Readable & structured** — conversion logic lives in `ZwaveMapper`, models separated
+- [x] **Efficient** — subscription-based (`"value updated"`/`"dead"`/`"alive"`), not polling
+- [ ] **Diagnosable** — decent per-area log tags (`[PAIR]`, `[CMD]`, `[JOIN]`, …), but
+      `send_command`'s exception handler re-raises with `from None`, discarding the original traceback
+- [x] **Rich parameter metadata** — role/visibility/`main_parameter` resolved per value via `ZwaveMapper`
+- [ ] **Owned** — TODO: add a listed maintainer
+- [ ] _nice-to-have:_ localizable naming · firmware/software updates · user-facing supported-device docs
 
 ### Notes
 
-<!-- EXAMPLE / optional — free text. Anything a reader should know that the checklist can't
-     capture. Delete this comment and write your own, or remove the section if unused. -->
-
-_e.g. "Hobby project, maintained best-effort." · "IP transport works; BLE pairing is not
-implemented yet." · "Help wanted: reliable re-pair after a bridge reboot." · known quirks,
-firmware versions tested against, limitations._
+- Z-Wave discovery doesn't use `zeroconf`/`ssdp`/`ble` — joined/reconciled nodes are surfaced
+  directly from `zwave-js-server`'s own `"node added"` event.
+- On startup, devices already known to the Hub are matched against the live node list and marked
+  available/subscribed directly, without a corresponding `controller_did_connect_device` call —
+  worth revisiting if the Hub relies on that call to refresh its own state after a restart.
+- `last_error` is set explicitly when a paired device isn't found on the network at startup and
+  while an exclusion is pending, but isn't cleared/set on ordinary `"dead"`/`"alive"` transitions.
 
 ## License
 
-See [LICENSE](LICENSE). Your integration code is yours to license as you choose. For
-commercial licensing or partnership inquiries regarding MajorDom, contact us via
-[parker-industries.org/partnership](https://parker-industries.org/partnership).
+See [LICENSE](LICENSE). For commercial licensing or partnership inquiries regarding MajorDom,
+contact us via [parker-industries.org/partnership](https://parker-industries.org/partnership).
