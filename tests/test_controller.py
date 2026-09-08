@@ -8,6 +8,7 @@ re-creates the node with the same NODE_ID.
 import asyncio
 
 from majordom_integration_sdk.schemas.command import DeviceCommand
+from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.testing import RecordingControllerOutput
 from virtual_zwave_network import VirtualZwaveNetwork
 
@@ -77,9 +78,12 @@ async def test_fetches_state(
     await controller.fetch(device)
     new_events = output.events[events_before:]
 
-    assert any(e.device_id == device.id and e.value is True for e in new_events), (
-        "fetch() never reported the current value back to the Hub"
-    )
+    assert any(
+        isinstance(e, DeviceParameterChange)
+        and e.device_id == device.id
+        and e.value is True
+        for e in new_events
+    ), "fetch() never reported the current value back to the Hub"
     await controller.stop()
 
 
