@@ -17,7 +17,7 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
-package-mode = false
+package-mode = true
 packages = [{ include = "majordom_zwave" }]
 
 [tool.poetry.group.dev.dependencies]
@@ -26,6 +26,7 @@ pytest-asyncio = "^1.4.0"
 ruff = "^0.16.6"
 ty = "^0.0.78"
 poethepoet = "^0.48.0"
+pytest-cov = "^7.1.0"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
