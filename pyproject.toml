@@ -49,7 +49,7 @@ poetry run ruff format || code=1
 echo "\nRunning ty:"
 poetry run ty check || code=1
 echo "\nRunning pytest:"
-poetry run pytest --cov=majordom_matter --cov-report=xml || code=1
+poetry run pytest --cov=majordom_zwave --cov-report=xml || code=1
 echo "\nRunning poetry build:"
 poetry build || code=1
 echo "\nRunning poetry check:"
