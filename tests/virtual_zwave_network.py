@@ -2,30 +2,48 @@
 Client the controller creates becomes an in-memory stub instead of hitting a
 real server. Everything else (Driver/Controller/Node/Value) is the real library.
 """
+
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Self, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 from zwave_js_server.client import Client
 from zwave_js_server.event import Event
 from zwave_js_server.model.driver import Driver
+from zwave_js_server.model.log_config import LogConfigDataType
 from zwave_js_server.model.node import Node
+from zwave_js_server.model.node.data_model import NodeDataType
 
-_LOG_CONFIG = {
-    "enabled": True, "level": "info", "logToFile": False,
-    "filename": "", "forceConsole": False,
+_LOG_CONFIG: LogConfigDataType = {
+    "enabled": True,
+    "level": "info",
+    "logToFile": False,
+    "filename": "",
+    "forceConsole": False,
 }
 
 _DEFAULT_CONTROLLER_STATE: dict[str, Any] = {
     "controller": {
-        "sdkVersion": "Z-Wave 3.95", "type": 1, "homeId": 1, "ownNodeId": 1,
-        "isSecondary": False, "isUsingHomeIdFromOtherNetwork": False,
-        "isSISPresent": True, "wasRealPrimary": True, "isStaticUpdateController": True,
-        "isSlave": False, "firmwareVersion": "1.0", "manufacturerId": 1,
-        "productType": 1, "productId": 1, "supportedFunctionTypes": [],
-        "sucNodeId": 1, "supportsTimers": False, "isRebuildingRoutes": False,
+        "sdkVersion": "Z-Wave 3.95",
+        "type": 1,
+        "homeId": 1,
+        "ownNodeId": 1,
+        "isSecondary": False,
+        "isUsingHomeIdFromOtherNetwork": False,
+        "isSISPresent": True,
+        "wasRealPrimary": True,
+        "isStaticUpdateController": True,
+        "isSlave": False,
+        "firmwareVersion": "1.0",
+        "manufacturerId": 1,
+        "productType": 1,
+        "productId": 1,
+        "supportedFunctionTypes": [],
+        "sucNodeId": 1,
+        "supportsTimers": False,
+        "isRebuildingRoutes": False,
         "inclusionState": 0,
     },
     "nodes": [],
@@ -35,23 +53,45 @@ _DEFAULT_VALUE_METADATA = {"type": "boolean", "readable": True, "writeable": Tru
 
 _DEFAULT_NODE_VALUES: list[dict[str, Any]] = [
     {
-        "commandClass": 37, "commandClassName": "Binary Switch", "endpoint": 0,
-        "property": "currentValue", "propertyName": "currentValue",
-        "value": False, "ccVersion": 1,
-        "metadata": {"type": "boolean", "readable": True, "writeable": False, "label": "Current value"},
+        "commandClass": 37,
+        "commandClassName": "Binary Switch",
+        "endpoint": 0,
+        "property": "currentValue",
+        "propertyName": "currentValue",
+        "value": False,
+        "ccVersion": 1,
+        "metadata": {
+            "type": "boolean",
+            "readable": True,
+            "writeable": False,
+            "label": "Current value",
+        },
     },
     {
-        "commandClass": 37, "commandClassName": "Binary Switch", "endpoint": 0,
-        "property": "targetValue", "propertyName": "targetValue",
-        "value": False, "ccVersion": 1,
-        "metadata": {"type": "boolean", "readable": True, "writeable": True, "label": "Target value"},
+        "commandClass": 37,
+        "commandClassName": "Binary Switch",
+        "endpoint": 0,
+        "property": "targetValue",
+        "propertyName": "targetValue",
+        "value": False,
+        "ccVersion": 1,
+        "metadata": {
+            "type": "boolean",
+            "readable": True,
+            "writeable": True,
+            "label": "Target value",
+        },
     },
 ]
 
 _DEFAULT_NODE_ENDPOINTS: list[dict[str, Any]] = [
-    {"index": 0, "deviceClass": None, "commandClasses": [
-        {"id": 37, "name": "Binary Switch", "version": 1, "isSecure": False},
-    ]},
+    {
+        "index": 0,
+        "deviceClass": None,
+        "commandClasses": [
+            {"id": 37, "name": "Binary Switch", "version": 1, "isSecure": False},
+        ],
+    },
 ]
 
 # Client.async_send_command's return value IS the server message's "result"
@@ -81,12 +121,14 @@ class VirtualZwaveNetwork:
         self._patches: list[Any] = []
 
     async def _handle_send_command(self, message: dict, **_kwargs: Any) -> dict:
-        return self._command_responses.get(message.get("command", ""), {"success": True})
+        return self._command_responses.get(
+            message.get("command", ""), {"success": True}
+        )
 
     def set_response(self, command: str, response: dict) -> None:
         self._command_responses[command] = response
 
-    def __enter__(self) -> "VirtualZwaveNetwork":
+    def __enter__(self) -> Self:
         network = self
 
         async def fake_connect(client_self: Client) -> None:
@@ -94,7 +136,9 @@ class VirtualZwaveNetwork:
             client_self._client = Mock(closed=False)
 
         async def fake_listen(client_self: Client, driver_ready: asyncio.Event) -> None:
-            client_self.driver = Driver(client_self, network.controller_state, _LOG_CONFIG)
+            client_self.driver = Driver(
+                client_self, network.controller_state, _LOG_CONFIG
+            )
             network._client = client_self
             driver_ready.set()
             try:
@@ -104,45 +148,58 @@ class VirtualZwaveNetwork:
 
         async def fake_disconnect(client_self: Client) -> None:
             client_self.driver = None
-            if client_self._client is not None:
-                client_self._client.closed = True
+            # Don't touch `_client.closed` (read-only on the real
+            # ClientWebSocketResponse) -- dropping the reference entirely
+            # makes `.connected` False too, which is what matters here.
+            client_self._client = None
 
         self._patches = [
             patch.object(Client, "connect", new=fake_connect),
             patch.object(Client, "listen", new=fake_listen),
             patch.object(Client, "disconnect", new=fake_disconnect),
             patch.object(Client, "async_send_command", new=self.async_send_command),
-            patch.object(Client, "async_send_command_no_wait", new=self.async_send_command_no_wait),
+            patch.object(
+                Client,
+                "async_send_command_no_wait",
+                new=self.async_send_command_no_wait,
+            ),
         ]
         for p in self._patches:
             p.start()
         return self
 
-    def __exit__(self, *exc_info: Any) -> None:
+    def __exit__(self, *exc_info: object) -> None:
         for p in reversed(self._patches):
             p.stop()
 
+    def _connected_client(self) -> Client:
+        assert self._client is not None, (
+            "virtual_zwave used before controller.start() ran"
+        )
+        return self._client
+
     @property
     def controller(self):
-        assert self._client and self._client.driver, (
+        client = self._connected_client()
+        assert client.driver is not None, (
             "virtual_zwave.controller accessed before controller.start() ran"
         )
-        return self._client.driver.controller
+        return client.driver.controller
 
     def node_found(self, node_id: int) -> None:
         self.controller.emit("node found", {"node": {"nodeId": node_id}})
 
     def node_joined(self, node_data: dict) -> Node:
-        payload = {
+        payload: dict[str, Any] = {
             "status": 4,  # NodeStatus.ALIVE, not 1 (ASLEEP) -- ASLEEP makes
-                           # async_send_command silently switch to no_wait
+            # async_send_command silently switch to no_wait
             "ready": True,
             "interviewStage": "Complete",
             "endpoints": _DEFAULT_NODE_ENDPOINTS,
             "values": _DEFAULT_NODE_VALUES,
             **node_data,
         }
-        node = Node(self._client, payload)
+        node = Node(self._connected_client(), cast(NodeDataType, payload))
         self.controller.nodes[node.node_id] = node
         self.controller.emit("node added", {"node": node})
         return node
@@ -158,7 +215,7 @@ class VirtualZwaveNetwork:
         *,
         command_class: int,
         command_class_name: str,
-        property: int | str,  # noqa: A002
+        property: int | str,
         new_value: Any,
         prev_value: Any = None,
         property_name: str | None = None,
@@ -166,19 +223,22 @@ class VirtualZwaveNetwork:
         metadata: dict | None = None,
     ) -> None:
         node = self.controller.nodes[node_id]
-        event = Event("value updated", {
-            "source": "node",
-            "event": "value updated",
-            "nodeId": node_id,
-            "args": {
-                "commandClass": command_class,
-                "commandClassName": command_class_name,
-                "endpoint": endpoint,
-                "property": property,
-                "propertyName": property_name or str(property),
-                "newValue": new_value,
-                "prevValue": prev_value,
-                "metadata": metadata or _DEFAULT_VALUE_METADATA,
+        event = Event(
+            "value updated",
+            {
+                "source": "node",
+                "event": "value updated",
+                "nodeId": node_id,
+                "args": {
+                    "commandClass": command_class,
+                    "commandClassName": command_class_name,
+                    "endpoint": endpoint,
+                    "property": property,
+                    "propertyName": property_name or str(property),
+                    "newValue": new_value,
+                    "prevValue": prev_value,
+                    "metadata": metadata or _DEFAULT_VALUE_METADATA,
+                },
             },
-        })
+        )
         node.receive_event(event)

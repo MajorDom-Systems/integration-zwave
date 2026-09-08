@@ -21,69 +21,75 @@ IDENTIFY_INDICATOR_ID = 0x50
 
 # Protocol/network plumbing: never shown to the user, regardless of read/write access.
 # (association & multi channel wiring, security/transport encapsulation, inclusion, S2, etc.)
-SYSTEM_COMMAND_CLASSES: frozenset[CommandClass] = frozenset({
-    CommandClass.NO_OPERATION,
-    CommandClass.CONTROLLER_REPLICATION,
-    CommandClass.APPLICATION_STATUS,
-    CommandClass.ZIP,
-    CommandClass.NETWORK_MANAGEMENT_INCLUSION,
-    CommandClass.NETWORK_MANAGEMENT_BASIC,
-    CommandClass.NETWORK_MANAGEMENT_PROXY,
-    CommandClass.NETWORK_MANAGEMENT_PRIMARY,
-    CommandClass.NETWORK_MANAGEMENT_INSTALLATION_MAINTENANCE,
-    CommandClass.TRANSPORT_SERVICE,
-    CommandClass.CRC_16_ENCAP,
-    CommandClass.APPLICATION_CAPABILITY,
-    CommandClass.ASSOCIATION,
-    CommandClass.ASSOCIATION_GRP_INFO,
-    CommandClass.MULTI_CHANNEL,
-    CommandClass.MULTI_CHANNEL_ASSOCIATION,
-    CommandClass.MULTI_CMD,
-    CommandClass.SUPERVISION,
-    CommandClass.ZWAVEPLUS_INFO,
-    CommandClass.INCLUSION_CONTROLLER,
-    CommandClass.NODE_NAMING,
-    CommandClass.NODE_PROVISIONING,
-    CommandClass.MANUFACTURER_PROPRIETARY,
-    CommandClass.PROPRIETARY,
-    CommandClass.SECURITY,
-    CommandClass.SECURITY_2,
-    CommandClass.SECURITY_SCHEME0_MARK,
-    CommandClass.MARK,
-    CommandClass.TIME,
-    CommandClass.TIME_PARAMETERS,
-    CommandClass.CLOCK,
-    CommandClass.GEOGRAPHIC_LOCATION,
-    CommandClass.FIRMWARE_UPDATE_MD,
-    CommandClass.GROUPING_NAME,
-    CommandClass.REMOTE_ASSOCIATION_ACTIVATE,
-    CommandClass.REMOTE_ASSOCIATION,
-    CommandClass.SCREEN_MD,
-    CommandClass.SCREEN_ATTRIBUTES,
-    CommandClass.DEVICE_RESET_LOCALLY,
-})
+SYSTEM_COMMAND_CLASSES: frozenset[CommandClass] = frozenset(
+    {
+        CommandClass.NO_OPERATION,
+        CommandClass.CONTROLLER_REPLICATION,
+        CommandClass.APPLICATION_STATUS,
+        CommandClass.ZIP,
+        CommandClass.NETWORK_MANAGEMENT_INCLUSION,
+        CommandClass.NETWORK_MANAGEMENT_BASIC,
+        CommandClass.NETWORK_MANAGEMENT_PROXY,
+        CommandClass.NETWORK_MANAGEMENT_PRIMARY,
+        CommandClass.NETWORK_MANAGEMENT_INSTALLATION_MAINTENANCE,
+        CommandClass.TRANSPORT_SERVICE,
+        CommandClass.CRC_16_ENCAP,
+        CommandClass.APPLICATION_CAPABILITY,
+        CommandClass.ASSOCIATION,
+        CommandClass.ASSOCIATION_GRP_INFO,
+        CommandClass.MULTI_CHANNEL,
+        CommandClass.MULTI_CHANNEL_ASSOCIATION,
+        CommandClass.MULTI_CMD,
+        CommandClass.SUPERVISION,
+        CommandClass.ZWAVEPLUS_INFO,
+        CommandClass.INCLUSION_CONTROLLER,
+        CommandClass.NODE_NAMING,
+        CommandClass.NODE_PROVISIONING,
+        CommandClass.MANUFACTURER_PROPRIETARY,
+        CommandClass.PROPRIETARY,
+        CommandClass.SECURITY,
+        CommandClass.SECURITY_2,
+        CommandClass.SECURITY_SCHEME0_MARK,
+        CommandClass.MARK,
+        CommandClass.TIME,
+        CommandClass.TIME_PARAMETERS,
+        CommandClass.CLOCK,
+        CommandClass.GEOGRAPHIC_LOCATION,
+        CommandClass.FIRMWARE_UPDATE_MD,
+        CommandClass.GROUPING_NAME,
+        CommandClass.REMOTE_ASSOCIATION_ACTIVATE,
+        CommandClass.REMOTE_ASSOCIATION,
+        CommandClass.SCREEN_MD,
+        CommandClass.SCREEN_ATTRIBUTES,
+        CommandClass.DEVICE_RESET_LOCALLY,
+    }
+)
 
 # Technically readable/reportable, but the "settings/advanced" kind of reading (battery %,
 # firmware version, RSSI-ish diagnostics, wake-up interval) rather than a main everyday control.
 # ParameterVisibility.setting explicitly covers this case per its docstring.
-DIAGNOSTIC_COMMAND_CLASSES: frozenset[CommandClass] = frozenset({
-    CommandClass.BATTERY,
-    CommandClass.VERSION,
-    CommandClass.MANUFACTURER_SPECIFIC,
-    CommandClass.POWERLEVEL,
-    CommandClass.WAKE_UP,
-    CommandClass.INDICATOR,
-    CommandClass.PROTECTION,
-    CommandClass.CONFIGURATION,  # device settings behind an "advanced" tap, not main interaction
-})
+DIAGNOSTIC_COMMAND_CLASSES: frozenset[CommandClass] = frozenset(
+    {
+        CommandClass.BATTERY,
+        CommandClass.VERSION,
+        CommandClass.MANUFACTURER_SPECIFIC,
+        CommandClass.POWERLEVEL,
+        CommandClass.WAKE_UP,
+        CommandClass.INDICATOR,
+        CommandClass.PROTECTION,
+        CommandClass.CONFIGURATION,  # device settings behind an "advanced" tap, not main interaction
+    }
+)
 
 # CCs that report one-shot occurrences rather than a persistent state (button presses,
 # scene activations, alarms) — modeled as ParameterRole.event regardless of read/write flags.
-EVENT_COMMAND_CLASSES: frozenset[CommandClass] = frozenset({
-    CommandClass.CENTRAL_SCENE,
-    CommandClass.SCENE_ACTIVATION,
-    CommandClass.NOTIFICATION,
-})
+EVENT_COMMAND_CLASSES: frozenset[CommandClass] = frozenset(
+    {
+        CommandClass.CENTRAL_SCENE,
+        CommandClass.SCENE_ACTIVATION,
+        CommandClass.NOTIFICATION,
+    }
+)
 
 # zwave-js's ValueMetadata.unit is a freeform string straight from the device's CC report, not a
 # controlled vocabulary — map the ones we recognize, leave the rest unmapped rather than guessed.

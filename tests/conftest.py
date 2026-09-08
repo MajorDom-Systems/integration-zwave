@@ -1,19 +1,27 @@
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from majordom_integration_sdk.controller import AbstractController
-from majordom_integration_sdk.schemas.device import CredentialsType, Device, DeviceState, Discovery
+from majordom_integration_sdk.schemas.device import (
+    CredentialsType,
+    Device,
+    DeviceState,
+    Discovery,
+)
 from majordom_integration_sdk.schemas.parameter import (
     ParameterDataType,
     ParameterRole,
     ParameterState,
     ParameterVisibility,
 )
-from majordom_integration_sdk.testing import build_test_dependencies
+from majordom_integration_sdk.testing import (
+    RecordingControllerOutput,
+    build_test_dependencies,
+)
+from virtual_zwave_network import VirtualZwaveNetwork
 
 from majordom_zwave import ZwaveController
-
-from virtual_zwave_network import VirtualZwaveNetwork
 
 INTEGRATION = "Zwave"
 
@@ -21,6 +29,14 @@ INTEGRATION = "Zwave"
 @pytest.fixture(scope="session")
 def deps() -> AbstractController.Dependencies:
     return build_test_dependencies(integration=INTEGRATION)
+
+
+@pytest.fixture(scope="session")
+def output(deps: AbstractController.Dependencies) -> RecordingControllerOutput:
+    # deps.output is typed as the abstract ControllerOutput; build_test_dependencies()
+    # always wires the concrete RecordingControllerOutput, so this cast is safe and
+    # gives tests access to its recorded fields (.events, .connected_devices, ...).
+    return cast(RecordingControllerOutput, deps.output)
 
 
 @pytest.fixture(scope="session")

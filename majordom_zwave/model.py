@@ -1,5 +1,10 @@
+from majordom_integration_sdk.schemas import (
+    Device,
+    DeviceState,
+    Parameter,
+    ParameterState,
+)
 from pydantic import BaseModel
-from majordom_integration_sdk.schemas import Device, DeviceState, Parameter, ParameterState
 
 
 class ZwaveDeviceIntegrationData(BaseModel):

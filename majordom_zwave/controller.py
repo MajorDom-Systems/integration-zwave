@@ -4,34 +4,44 @@ from typing import ClassVar, override
 from uuid import UUID
 
 from aiohttp import ClientSession
-from zwave_js_server.client import Client as ZwaveClient
-from zwave_js_server.const import CommandClass, InclusionStrategy, NodeStatus, SecurityClass
-from zwave_js_server.model.controller.inclusion_and_provisioning import InclusionGrant
-from zwave_js_server.model.node import Node
-from zwave_js_server.model.value import Value
-from zwave_js_server.model.utils import async_parse_qr_code_string
 from majordom_integration_sdk.controller import AbstractController
-from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
+from majordom_integration_sdk.schemas import (
+    DeviceCommand,
+    Discovery,
+    ProvidedCredentials,
+)
 from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import ParameterUnit
+from zwave_js_server.client import Client as ZwaveClient
+from zwave_js_server.const import (
+    CommandClass,
+    InclusionStrategy,
+    NodeStatus,
+    SecurityClass,
+)
+from zwave_js_server.model.controller.inclusion_and_provisioning import InclusionGrant
+from zwave_js_server.model.node import Node
+from zwave_js_server.model.utils import async_parse_qr_code_string
+from zwave_js_server.model.value import Value
 
 from .config import zwave_server_url
+from .exceptions import ZwaveConnectionError, ZwaveUnexpectedError
+from .mapper import ZwaveMapper
 from .model import (
     ZwaveDevice,
-    ZwaveDeviceState,
     ZwaveDeviceIntegrationData,
+    ZwaveDeviceState,
     ZwaveParameter,
     ZwaveParameterIntegrationData,
     ZwaveParameterState,
 )
-from .exceptions import ZwaveConnectionError, ZwaveUnexpectedError
-from .mapper import ZwaveMapper
 from .zwave_spec import IDENTIFY_INDICATOR_ID
 
 log = logging.getLogger(__name__)
 
-#TODO: заполнить ридми под интеграцию по примерам меттера и зигби
+# TODO: заполнить ридми под интеграцию по примерам меттера и зигби
+
 
 class ZwaveController(AbstractController):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
@@ -90,10 +100,20 @@ class ZwaveController(AbstractController):
         await ready.wait()
 
         controller = self._zwave_client.driver.controller
-        controller.on("node added", lambda data: self._create_task(self._node_added(data["node"])))
-        controller.on("node removed", lambda data: self._create_task(self._node_removed(data["node"])))
+        controller.on(
+            "node added", lambda data: self._create_task(self._node_added(data["node"]))
+        )
+        controller.on(
+            "node removed",
+            lambda data: self._create_task(self._node_removed(data["node"])),
+        )
         # S2 auto-grant only — no PIN prompt / no discovery raised for it.
-        controller.on("grant security classes", lambda data: self._create_task(self._grant_security_classes(data["requested"])))
+        controller.on(
+            "grant security classes",
+            lambda data: self._create_task(
+                self._grant_security_classes(data["requested"])
+            ),
+        )
 
         log.debug("[READY] connected to %s", zwave_server_url)
 
@@ -104,7 +124,10 @@ class ZwaveController(AbstractController):
                     try:
                         device = ZwaveDevice.model_validate(raw_device.model_dump())
                     except Exception:
-                        log.debug("[SKIP] device_id=%s not paired yet, skipping", raw_device.id)
+                        log.debug(
+                            "[SKIP] device_id=%s not paired yet, skipping",
+                            raw_device.id,
+                        )
                         continue
 
                     node = controller.nodes.get(device.integration_data.node_id)
@@ -112,7 +135,11 @@ class ZwaveController(AbstractController):
                         device.available = False
                         device.last_error = f"Device {device.name} is no longer connected to the Z-Wave network"
                         await device_repository.save(device, device.id)
-                        log.debug("[MISSING] device_id=%s node_id=%s not on network", device.id, device.integration_data.node_id)
+                        log.debug(
+                            "[MISSING] device_id=%s node_id=%s not on network",
+                            device.id,
+                            device.integration_data.node_id,
+                        )
                         continue
                     known_node_ids.add(node.node_id)
                     self._connected_devices[device.id] = node
@@ -121,9 +148,16 @@ class ZwaveController(AbstractController):
                     log.debug("[KNOWN] node_id=%s", node.node_id)
 
                 # Nodes already on the network but not ours yet (Hub restart, pre-existing node).
-                log.debug("[RECONCILE] %d node(s) on network, own_node_id=%s", len(controller.nodes), controller.own_node_id)
+                log.debug(
+                    "[RECONCILE] %d node(s) on network, own_node_id=%s",
+                    len(controller.nodes),
+                    controller.own_node_id,
+                )
                 for node in controller.nodes.values():
-                    if node.node_id == controller.own_node_id or node.node_id in known_node_ids:
+                    if (
+                        node.node_id == controller.own_node_id
+                        or node.node_id in known_node_ids
+                    ):
                         continue
                     await self._node_added(node)
             except Exception:
@@ -148,25 +182,38 @@ class ZwaveController(AbstractController):
     # Hub -> device operations
     # -------------------------------------------------------------------------
 
-    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None) -> None:
+    async def start_pairing_window(
+        self, duration_sec: int, credentials: ProvidedCredentials | None = None
+    ) -> None:
         self._require_client()
         controller = self._zwave_client.driver.controller
 
         if credentials and credentials.type is CredentialsType.qr:
             if not credentials.value:
                 raise ZwaveUnexpectedError("QR credentials provided without QR data")
-            provisioning_info = await async_parse_qr_code_string(self._zwave_client, credentials.value)
-            await controller.async_begin_inclusion(InclusionStrategy.SECURITY_S2, provisioning=provisioning_info)
+            provisioning_info = await async_parse_qr_code_string(
+                self._zwave_client, credentials.value
+            )
+            await controller.async_begin_inclusion(
+                InclusionStrategy.SECURITY_S2, provisioning=provisioning_info
+            )
             log.debug("[PAIRING] inclusion window opened for %ds via QR", duration_sec)
 
         elif credentials and credentials.type is CredentialsType.code:
             if not credentials.value:
                 raise ZwaveUnexpectedError("PIN credentials provided without a value")
-            await controller.async_begin_inclusion(InclusionStrategy.SECURITY_S2, dsk=credentials.value)
-            log.debug("[PAIRING] inclusion window opened for %ds with pre-supplied PIN", duration_sec)
+            await controller.async_begin_inclusion(
+                InclusionStrategy.SECURITY_S2, dsk=credentials.value
+            )
+            log.debug(
+                "[PAIRING] inclusion window opened for %ds with pre-supplied PIN",
+                duration_sec,
+            )
 
         elif credentials and credentials.type is CredentialsType.secret:
-            raise ZwaveUnexpectedError("Z-Wave does not support secret-based pairing credentials")
+            raise ZwaveUnexpectedError(
+                "Z-Wave does not support secret-based pairing credentials"
+            )
 
         else:
             await controller.async_begin_inclusion(InclusionStrategy.DEFAULT)
@@ -174,13 +221,17 @@ class ZwaveController(AbstractController):
 
         self._create_task(self._close_pairing_window(duration_sec))
 
-    async def pair_device(self, discovery: Discovery, credentials: ProvidedCredentials | None) -> UUID:
+    async def pair_device(
+        self, discovery: Discovery, credentials: ProvidedCredentials | None
+    ) -> UUID:
         """Waits for the pending node's interview to finish, then builds and saves the device."""
         self._require_client()
 
         node = self._awaiting_zw_discoveries.pop(discovery.id, None)
         if node is None:
-            raise ZwaveUnexpectedError(f"No pending Z-Wave discovery for {discovery.id}")
+            raise ZwaveUnexpectedError(
+                f"No pending Z-Wave discovery for {discovery.id}"
+            )
         self._majordom_discoveries.pop(discovery.id, None)
 
         await self._wait_until_ready(node)
@@ -196,15 +247,21 @@ class ZwaveController(AbstractController):
             if device.integration_data:
                 device.integration_data.node_id = node.node_id
             else:
-                device.integration_data = ZwaveDeviceIntegrationData(node_id=node.node_id)
+                device.integration_data = ZwaveDeviceIntegrationData(
+                    node_id=node.node_id
+                )
 
             parameters = self._build_parameters(device_id, node)
             device.parameters = parameters
 
-            main_parameter_id, default_value = self._mapper.get_main_parameter(device_id, node)
+            main_parameter_id, default_value = self._mapper.get_main_parameter(
+                device_id, node
+            )
             device.main_parameter = main_parameter_id
             if main_parameter_id and default_value is not None:
-                main_parameter = next((p for p in parameters if p.id == main_parameter_id), None)
+                main_parameter = next(
+                    (p for p in parameters if p.id == main_parameter_id), None
+                )
                 if main_parameter is None:
                     device.main_parameter = None
                 else:
@@ -254,7 +311,7 @@ class ZwaveController(AbstractController):
                 await controller.async_begin_exclusion()
                 try:
                     await asyncio.wait_for(removed.wait(), timeout=60)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     raise ZwaveUnexpectedError(
                         f"Node {zwave_node.node_id} was not excluded in time — make sure the "
                         f"device was put into exclusion mode"
@@ -289,7 +346,8 @@ class ZwaveController(AbstractController):
             (
                 v
                 for v in zwave_node.values.values()
-                if v.command_class in (CommandClass.SWITCH_BINARY, CommandClass.SWITCH_MULTILEVEL)
+                if v.command_class
+                in (CommandClass.SWITCH_BINARY, CommandClass.SWITCH_MULTILEVEL)
                 and v.property_ == "targetValue"
             ),
             None,
@@ -302,9 +360,15 @@ class ZwaveController(AbstractController):
         current_value = zwave_node.values.get(
             switch_value.value_id.replace("targetValue", "currentValue")
         )
-        restore_value = current_value.value if current_value and current_value.value is not None else 0
+        restore_value = (
+            current_value.value
+            if current_value and current_value.value is not None
+            else 0
+        )
 
-        on_value = 0xFF if switch_value.command_class == CommandClass.SWITCH_BINARY else 99
+        on_value = (
+            0xFF if switch_value.command_class == CommandClass.SWITCH_BINARY else 99
+        )
         for _ in range(10):
             await zwave_node.async_set_value(switch_value, 0)
             await asyncio.sleep(0.6)
@@ -320,34 +384,54 @@ class ZwaveController(AbstractController):
         zwave_node = self._require_node(device)
         parameters: list[DeviceParameterChange] = []
         for value_id, value in zwave_node.values.items():
-            parameters.append(DeviceParameterChange(
-                device_id=device.id,
-                parameter_id=self._mapper.parameter_uuid(device.id, value_id),
-                value=self._mapper.format_zwave_value(value),
-            ))
+            parameters.append(
+                DeviceParameterChange(
+                    device_id=device.id,
+                    parameter_id=self._mapper.parameter_uuid(device.id, value_id),
+                    value=self._mapper.format_zwave_value(value),
+                )
+            )
 
         await self.dependencies.output.controller_did_receive_events(self, parameters)
 
-    async def send_command(self, command: DeviceCommand, device: ZwaveDevice, parameter: ZwaveParameter):
+    async def send_command(
+        self, command: DeviceCommand, device: ZwaveDevice, parameter: ZwaveParameter
+    ):
         self._require_client()
 
         zwave_node = self._require_node(device)
-        zwave_value = self._require_value(parameter.integration_data.value_id, zwave_node)
+        zwave_value = self._require_value(
+            parameter.integration_data.value_id, zwave_node
+        )
         if zwave_value.metadata.writeable is False:
-            raise ZwaveUnexpectedError(f"Value {parameter.integration_data.value_id} is not writeable")
+            raise ZwaveUnexpectedError(
+                f"Value {parameter.integration_data.value_id} is not writeable"
+            )
         try:
             awake = zwave_node.status != NodeStatus.ASLEEP
-            result = await zwave_node.async_set_value(zwave_value, command.value, wait_for_result=awake)
+            result = await zwave_node.async_set_value(
+                zwave_value, command.value, wait_for_result=awake
+            )
             log.info(result)
         except Exception as e:
             raise ZwaveUnexpectedError(
                 f"Failed to set value {parameter.integration_data.value_id} on node {zwave_node.node_id}: {e}"
             ) from None
         if awake and result is not None and not result.status:
-            log.warning("[CMD] node_id=%s value_id=%s result=%s", zwave_node.node_id, parameter.integration_data.value_id, result)
+            log.warning(
+                "[CMD] node_id=%s value_id=%s result=%s",
+                zwave_node.node_id,
+                parameter.integration_data.value_id,
+                result,
+            )
 
         await self.dependencies.output.controller_did_receive_events(
-            self, [DeviceParameterChange(device_id=device.id, parameter_id=parameter.id, value=command.value)]
+            self,
+            [
+                DeviceParameterChange(
+                    device_id=device.id, parameter_id=parameter.id, value=command.value
+                )
+            ],
         )
 
     # =========================================================================
@@ -370,7 +454,9 @@ class ZwaveController(AbstractController):
         raise ZwaveConnectionError("Zwave client is not started")
 
     def _require_node(self, device: ZwaveDevice) -> Node:
-        node = self._zwave_client.driver.controller.nodes.get(device.integration_data.node_id)
+        node = self._zwave_client.driver.controller.nodes.get(
+            device.integration_data.node_id
+        )
         if not node:
             raise ZwaveUnexpectedError(f"Node for device {device.id} not found")
         return node
@@ -378,7 +464,9 @@ class ZwaveController(AbstractController):
     def _require_value(self, value_id: str, node: Node) -> Value:
         value = node.values.get(value_id)
         if not value:
-            raise ZwaveUnexpectedError(f"Value with {value_id} id for node {node.node_id} not found")
+            raise ZwaveUnexpectedError(
+                f"Value with {value_id} id for node {node.node_id} not found"
+            )
         return value
 
     # -------------------------------------------------------------------------
@@ -413,19 +501,27 @@ class ZwaveController(AbstractController):
         unsubscribe = node.on("ready", lambda data: became_ready.set())
         try:
             await asyncio.wait_for(became_ready.wait(), timeout=120)
-        except asyncio.TimeoutError:
-            log.warning("[PAIR] node_id=%s not ready after 120s, pairing with partial values", node.node_id)
+        except TimeoutError:
+            log.warning(
+                "[PAIR] node_id=%s not ready after 120s, pairing with partial values",
+                node.node_id,
+            )
         finally:
             unsubscribe()
 
-    def _build_parameters(self, device_id: UUID, node: Node) -> list[ZwaveParameterState]:
+    def _build_parameters(
+        self, device_id: UUID, node: Node
+    ) -> list[ZwaveParameterState]:
         """Maps every Z-Wave value on a node into a majordom parameter state."""
         parameters: list[ZwaveParameterState] = []
         for value_id, value in node.values.items():
             metadata = value.metadata
             parameter = ZwaveParameterState(
                 id=self._mapper.parameter_uuid(device_id, value_id),
-                name=metadata.label or value.property_name or value.property_key_name or str(value.property_),
+                name=metadata.label
+                or value.property_name
+                or value.property_key_name
+                or str(value.property_),
                 data_type=self._mapper.parse_zwave_data_type(value),
                 role=self._mapper.get_role(value.command_class, metadata),
                 visibility=self._mapper.get_visibility(value.command_class, metadata),
@@ -476,7 +572,9 @@ class ZwaveController(AbstractController):
             expiration=None,
             transport=NonEmptyStr("ZWAVE"),
             device_manufacturer=None,
-            device_name=NonEmptyStr(node.name or node.device_config.description or "Unknown"),
+            device_name=NonEmptyStr(
+                node.name or node.device_config.description or "Unknown"
+            ),
             device_category=None,
             device_icon=None,
         )
@@ -498,16 +596,33 @@ class ZwaveController(AbstractController):
             return
         self._availability[device_id] = available
         if available:
-            await self.dependencies.output.controller_did_connect_device(self, device_id)
+            await self.dependencies.output.controller_did_connect_device(
+                self, device_id
+            )
         else:
             await self.dependencies.output.controller_did_lose_device(self, device_id)
 
     def _subscribe(self, device_id: UUID, node: Node) -> None:
-        node.on("value updated", lambda data: self._create_task(self._value_updated(device_id, data["value"])))
-        node.on("dead", lambda data: self._create_task(self._set_availability(device_id, False)))
-        node.on("alive", lambda data: self._create_task(self._set_availability(device_id, True)))
+        node.on(
+            "value updated",
+            lambda data: self._create_task(
+                self._value_updated(device_id, data["value"])
+            ),
+        )
+        node.on(
+            "dead",
+            lambda data: self._create_task(self._set_availability(device_id, False)),
+        )
+        node.on(
+            "alive",
+            lambda data: self._create_task(self._set_availability(device_id, True)),
+        )
 
     async def _value_updated(self, device_id: UUID, value: Value) -> None:
         parameter_id = self._mapper.parameter_uuid(device_id, value.value_id)
-        event = DeviceParameterChange(device_id=device_id, parameter_id=parameter_id, value=self._mapper.format_zwave_value(value))
+        event = DeviceParameterChange(
+            device_id=device_id,
+            parameter_id=parameter_id,
+            value=self._mapper.format_zwave_value(value),
+        )
         await self.dependencies.output.controller_did_receive_events(self, [event])

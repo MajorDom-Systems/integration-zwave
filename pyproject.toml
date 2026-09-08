@@ -9,7 +9,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "majordom-integration-sdk (>=0.1.2,<0.2.0)",
-    "zwave-js-server-python (>=0.73.1,<0.74.0)"
+    "zwave-js-server-python (>=0.73.1,<0.74.0)",
 ]
 
 [build-system]
@@ -18,11 +18,43 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 package-mode = false
+packages = [{ include = "majordom_zwave" }]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.1.1"
 pytest-asyncio = "^1.4.0"
+ruff = "^0.16.6"
+ty = "^0.0.78"
+poethepoet = "^0.48.0"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"
+
+[tool.poe.tasks.install]
+shell = """
+poetry install
+echo '#!/bin/sh\npoetry run poe check' > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+echo "Pre-commit hook installed."
+"""
+
+[tool.poe.tasks.check]
+shell = """
+code=0
+echo "\nRunning ruff lint:"
+poetry run ruff check --fix || code=1
+echo "\nRunning ruff format:"
+poetry run ruff format || code=1
+echo "\nRunning ty:"
+poetry run ty check || code=1
+echo "\nRunning pytest:"
+poetry run pytest --cov=majordom_matter --cov-report=xml || code=1
+echo "\nRunning poetry build:"
+poetry build || code=1
+echo "\nRunning poetry check:"
+poetry check || code=1
+${ci:+git diff --exit-code}
+exit $code
+"""
+args = [{ name = "ci", type = "boolean" }]
