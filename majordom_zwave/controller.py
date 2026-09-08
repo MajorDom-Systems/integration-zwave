@@ -135,9 +135,7 @@ class ZwaveController(AbstractController):
                     node = controller.nodes.get(device.integration_data.node_id)
                     if node is None:
                         device.available = False
-                        device.last_error = (
-                            f"Device {device.name} is no longer connected to the Z-Wave network"
-                        )
+                        device.last_error = f"Device {device.name} is no longer connected to the Z-Wave network"
                         await device_repository.save(device, device.id)
                         log.debug(
                             "[MISSING] device_id=%s node_id=%s not on network",
