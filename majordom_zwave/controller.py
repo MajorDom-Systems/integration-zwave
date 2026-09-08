@@ -20,6 +20,7 @@ from zwave_js_server.const import (
     NodeStatus,
     SecurityClass,
 )
+from zwave_js_server.model.controller import Controller
 from zwave_js_server.model.controller.inclusion_and_provisioning import InclusionGrant
 from zwave_js_server.model.node import Node
 from zwave_js_server.model.utils import async_parse_qr_code_string
@@ -39,8 +40,6 @@ from .model import (
 from .zwave_spec import IDENTIFY_INDICATOR_ID
 
 log = logging.getLogger(__name__)
-
-# TODO: заполнить ридми под интеграцию по примерам меттера и зигби
 
 
 class ZwaveController(AbstractController):
@@ -99,7 +98,7 @@ class ZwaveController(AbstractController):
         self._create_task(self._zwave_client.listen(ready))
         await ready.wait()
 
-        controller = self._zwave_client.driver.controller
+        controller = self._get_controller()
         controller.on(
             "node added", lambda data: self._create_task(self._node_added(data["node"]))
         )
@@ -123,17 +122,22 @@ class ZwaveController(AbstractController):
                 for raw_device in await device_repository.get_all():
                     try:
                         device = ZwaveDevice.model_validate(raw_device.model_dump())
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         log.debug(
                             "[SKIP] device_id=%s not paired yet, skipping",
                             raw_device.id,
                         )
                         continue
 
+                    if device.integration_data is None:
+                        continue
+
                     node = controller.nodes.get(device.integration_data.node_id)
                     if node is None:
                         device.available = False
-                        device.last_error = f"Device {device.name} is no longer connected to the Z-Wave network"
+                        device.last_error = (
+                            f"Device {device.name} is no longer connected to the Z-Wave network"
+                        )
                         await device_repository.save(device, device.id)
                         log.debug(
                             "[MISSING] device_id=%s node_id=%s not on network",
@@ -143,7 +147,7 @@ class ZwaveController(AbstractController):
                         continue
                     known_node_ids.add(node.node_id)
                     self._connected_devices[device.id] = node
-                    self._availability[device.id] = node.ready
+                    self._availability[device.id] = bool(node.ready)
                     self._subscribe(device.id, node)
                     log.debug("[KNOWN] node_id=%s", node.node_id)
 
@@ -186,7 +190,7 @@ class ZwaveController(AbstractController):
         self, duration_sec: int, credentials: ProvidedCredentials | None = None
     ) -> None:
         self._require_client()
-        controller = self._zwave_client.driver.controller
+        controller = self._get_controller()
 
         if credentials and credentials.type is CredentialsType.qr:
             if not credentials.value:
@@ -284,7 +288,7 @@ class ZwaveController(AbstractController):
 
     async def unpair(self, device: ZwaveDevice):
         self._require_client()
-        controller = self._zwave_client.driver.controller
+        controller = self._get_controller()
         zwave_node = self._require_node(device)
 
         if await controller.async_is_failed_node(zwave_node):
@@ -413,7 +417,7 @@ class ZwaveController(AbstractController):
                 zwave_value, command.value, wait_for_result=awake
             )
             log.info(result)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             raise ZwaveUnexpectedError(
                 f"Failed to set value {parameter.integration_data.value_id} on node {zwave_node.node_id}: {e}"
             ) from None
@@ -438,9 +442,10 @@ class ZwaveController(AbstractController):
     # Private helpers
     # =========================================================================
 
-    # -------------------------------------------------------------------------
-    # Generic guards / lookups
-    # -------------------------------------------------------------------------
+    def _get_controller(self) -> Controller:
+        if self._zwave_client.driver is None:
+            raise ZwaveUnexpectedError("Z-Wave driver is not connected")
+        return self._zwave_client.driver.controller
 
     def _create_task(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -454,9 +459,10 @@ class ZwaveController(AbstractController):
         raise ZwaveConnectionError("Zwave client is not started")
 
     def _require_node(self, device: ZwaveDevice) -> Node:
-        node = self._zwave_client.driver.controller.nodes.get(
-            device.integration_data.node_id
-        )
+        if device.integration_data is None:
+            raise ZwaveUnexpectedError(f"Device {device.id} missing integration_data")
+        controller = self._get_controller()
+        node = controller.nodes.get(device.integration_data.node_id)
         if not node:
             raise ZwaveUnexpectedError(f"Node for device {device.id} not found")
         return node
@@ -475,7 +481,7 @@ class ZwaveController(AbstractController):
 
     async def _close_pairing_window(self, duration_sec: int) -> None:
         await asyncio.sleep(duration_sec)
-        controller = self._zwave_client.driver.controller
+        controller = self._get_controller()
         await controller.async_stop_inclusion()
         log.debug("[PAIRING] inclusion window closed")
 
@@ -542,7 +548,8 @@ class ZwaveController(AbstractController):
             security_classes=[SecurityClass(c) for c in requested["securityClasses"]],
             client_side_auth=requested["clientSideAuth"],
         )
-        await self._zwave_client.driver.controller.async_grant_security_classes(grant)
+        controller = self._get_controller()
+        await controller.async_grant_security_classes(grant)
         log.debug("[S2] granted security classes=%s", requested["securityClasses"])
 
     # -------------------------------------------------------------------------

@@ -6,4 +6,4 @@ See `controller.py` for the entry point the Hub actually instantiates.
 
 from .controller import ZwaveController
 
-__all__ = ["ZWaveController"]
+__all__ = ["ZwaveController"]
