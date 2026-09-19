@@ -1,15 +1,47 @@
 [project]
 name = "integration-zwave"
 version = "0.1.0"
-description = ""
-authors = [
-    {name = "Ehor Lukianov",email = "ehorlukianov@gmail.com"}
-]
+description = "Zwave integration for MajorDom — bridges Zwave devices into the MajorDom language."
+authors = [{ name = "Mark Parker", email = "mark@parker-programs.com" }]
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["majordom", "zwave", "zwave-js-server-python", "smart-home", "home-automation", "iot", "integration"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Home Automation",
+    "Programming Language :: Python :: 3",
+]
 requires-python = ">=3.12"
 dependencies = [
-    "majordom-integration-sdk (>=0.1.2,<0.2.0)",
+    "majordom-integration-sdk (>=0.1.5,<1.0)",
     "zwave-js-server-python (>=0.73.1,<0.74.0)",
+]
+
+[project.urls]
+Homepage = "https://majordom.io"
+Documentation = "https://docs.majordom.io/device-integration"
+Repository = "https://github.com/MajorDom-Systems/integration-zwave"
+
+[dependency-groups]
+dev = [
+    "poethepoet (>=0.36.0,<1.0.0)",
+    "ty",             # type checker; swap for mypy/pyright by editing the `check` task below
+    "ruff",
+    "pip-audit",      # dependency vuln scan — gates release (not everyday CI); run locally with `poetry run pip-audit`
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-timeout",
+    "pytest-repeat",
+    "pytest-benchmark",
+    "pytest-profiling",
+    "pytest-resource-usage",
+    "coverage",
+    "pympler",        # object memory introspection, leak hunting
+    "psutil",         # process/system resource usage
+    "faker",          # realistic fake data for tests
 ]
 
 [build-system]
@@ -17,20 +49,41 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
-package-mode = true
+requires-poetry = ">=2.0"
 packages = [{ include = "majordom_zwave" }]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^9.1.1"
-pytest-asyncio = "^1.4.0"
-ruff = "^0.16.6"
-ty = "^0.0.78"
-poethepoet = "^0.48.0"
-pytest-cov = "^7.1.0"
-
 [tool.pytest.ini_options]
-pythonpath = ["."]
 asyncio_mode = "auto"
+pythonpath = ["."]
+filterwarnings = ["once"]
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "I",   # isort
+]
+fixable = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*" = ["E402"]
 
 [tool.poe.tasks.install]
 shell = """
@@ -43,19 +96,27 @@ echo "Pre-commit hook installed."
 [tool.poe.tasks.check]
 shell = """
 code=0
+
 echo "\nRunning ruff lint:"
 poetry run ruff check --fix || code=1
+
 echo "\nRunning ruff format:"
 poetry run ruff format || code=1
+
 echo "\nRunning ty:"
 poetry run ty check || code=1
+
 echo "\nRunning pytest:"
-poetry run pytest --cov=majordom_zwave --cov-report=xml || code=1
+poetry run pytest --cov=integration_template --cov-report=xml || code=1
+
 echo "\nRunning poetry build:"
 poetry build || code=1
+
 echo "\nRunning poetry check:"
 poetry check || code=1
+
 ${ci:+git diff --exit-code}
+
 exit $code
 """
 args = [{ name = "ci", type = "boolean" }]
