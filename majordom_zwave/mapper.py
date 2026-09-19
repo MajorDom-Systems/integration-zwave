@@ -69,9 +69,7 @@ class ZwaveMapper:
             return ParameterRole.control
         return ParameterRole.sensor
 
-    def get_visibility(
-        self, command_class: int, metadata: ValueMetadata
-    ) -> ParameterVisibility:
+    def get_visibility(self, command_class: int, metadata: ValueMetadata) -> ParameterVisibility:
         """Readable -> user, writeable-only -> setting, else system; SYSTEM/DIAGNOSTIC
         command classes override this for plumbing/diagnostic values."""
         if command_class in SYSTEM_COMMAND_CLASSES:
@@ -116,9 +114,7 @@ class ZwaveMapper:
         # Opaque CC-specific object — expose as data rather than guessing a shape.
         return ParameterDataType.data
 
-    def parse_zwave_valid_values(
-        self, metadata: ValueMetadata
-    ) -> dict[int | float | str, str] | None:
+    def parse_zwave_valid_values(self, metadata: ValueMetadata) -> dict[int | float | str, str] | None:
         """Converts states (`{"0": "Off"}`) to valid_values, coercing keys to int."""
         if not metadata.states:
             return None
@@ -130,9 +126,7 @@ class ZwaveMapper:
                 result[raw_key] = label
         return result
 
-    def get_main_parameter(
-        self, device_id: UUID, node: Node
-    ) -> tuple[UUID | None, bool | int | float | None]:
+    def get_main_parameter(self, device_id: UUID, node: Node) -> tuple[UUID | None, bool | int | float | None]:
         """Picks the value for the device's one-tap action, by MAIN_VALUE_BY_COMMAND_CLASS
         priority. Returns (None, None) if none applies."""
         for command_class, spec in MAIN_VALUE_BY_COMMAND_CLASS.items():
@@ -140,13 +134,10 @@ class ZwaveMapper:
                 (
                     v
                     for v in node.values.values()
-                    if v.command_class == command_class
-                    and v.property_name == spec.property_name
+                    if v.command_class == command_class and v.property_name == spec.property_name
                 ),
                 None,
             )
             if value is not None:
-                return self.parameter_uuid(
-                    device_id, value.value_id
-                ), spec.default_value
+                return self.parameter_uuid(device_id, value.value_id), spec.default_value
         return None, None

@@ -121,9 +121,7 @@ class VirtualZwaveNetwork:
         self._patches: list[Any] = []
 
     async def _handle_send_command(self, message: dict, **_kwargs: Any) -> dict:
-        return self._command_responses.get(
-            message.get("command", ""), {"success": True}
-        )
+        return self._command_responses.get(message.get("command", ""), {"success": True})
 
     def set_response(self, command: str, response: dict) -> None:
         self._command_responses[command] = response
@@ -136,9 +134,7 @@ class VirtualZwaveNetwork:
             client_self._client = Mock(closed=False)
 
         async def fake_listen(client_self: Client, driver_ready: asyncio.Event) -> None:
-            client_self.driver = Driver(
-                client_self, network.controller_state, _LOG_CONFIG
-            )
+            client_self.driver = Driver(client_self, network.controller_state, _LOG_CONFIG)
             network._client = client_self
             driver_ready.set()
             try:
@@ -173,17 +169,13 @@ class VirtualZwaveNetwork:
             p.stop()
 
     def _connected_client(self) -> Client:
-        assert self._client is not None, (
-            "virtual_zwave used before controller.start() ran"
-        )
+        assert self._client is not None, "virtual_zwave used before controller.start() ran"
         return self._client
 
     @property
     def controller(self):
         client = self._connected_client()
-        assert client.driver is not None, (
-            "virtual_zwave.controller accessed before controller.start() ran"
-        )
+        assert client.driver is not None, "virtual_zwave.controller accessed before controller.start() ran"
         return client.driver.controller
 
     def node_found(self, node_id: int) -> None:

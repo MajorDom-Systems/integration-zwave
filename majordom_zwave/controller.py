@@ -99,18 +99,14 @@ class ZwaveController(AbstractController):
         await ready.wait()
 
         controller = self._get_controller()
-        controller.on(
-            "node added", lambda data: self._create_task(self._node_added(data["node"]))
-        )
+        controller.on("node added", lambda data: self._create_task(self._node_added(data["node"])))
         controller.on(
             "node removed",
             lambda data: self._create_task(self._node_removed(data["node"])),
         )
         controller.on(
             "grant security classes",
-            lambda data: self._create_task(
-                self._grant_security_classes(data["requested"])
-            ),
+            lambda data: self._create_task(self._grant_security_classes(data["requested"])),
         )
 
         log.debug("[READY] connected to %s", zwave_server_url)
@@ -155,10 +151,7 @@ class ZwaveController(AbstractController):
                     controller.own_node_id,
                 )
                 for node in controller.nodes.values():
-                    if (
-                        node.node_id == controller.own_node_id
-                        or node.node_id in known_node_ids
-                    ):
+                    if node.node_id == controller.own_node_id or node.node_id in known_node_ids:
                         continue
                     await self._node_added(node)
             except Exception:
@@ -183,38 +176,28 @@ class ZwaveController(AbstractController):
     # Hub -> device operations
     # -------------------------------------------------------------------------
 
-    async def start_pairing_window(
-        self, duration_sec: int, credentials: ProvidedCredentials | None = None
-    ) -> None:
+    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None) -> None:
         self._require_client()
         controller = self._get_controller()
 
         if credentials and credentials.type is CredentialsType.qr:
             if not credentials.value:
                 raise ZwaveUnexpectedError("QR credentials provided without QR data")
-            provisioning_info = await async_parse_qr_code_string(
-                self._zwave_client, credentials.value
-            )
-            await controller.async_begin_inclusion(
-                InclusionStrategy.SECURITY_S2, provisioning=provisioning_info
-            )
+            provisioning_info = await async_parse_qr_code_string(self._zwave_client, credentials.value)
+            await controller.async_begin_inclusion(InclusionStrategy.SECURITY_S2, provisioning=provisioning_info)
             log.debug("[PAIRING] inclusion window opened for %ds via QR", duration_sec)
 
         elif credentials and credentials.type is CredentialsType.code:
             if not credentials.value:
                 raise ZwaveUnexpectedError("PIN credentials provided without a value")
-            await controller.async_begin_inclusion(
-                InclusionStrategy.SECURITY_S2, dsk=credentials.value
-            )
+            await controller.async_begin_inclusion(InclusionStrategy.SECURITY_S2, dsk=credentials.value)
             log.debug(
                 "[PAIRING] inclusion window opened for %ds with pre-supplied PIN",
                 duration_sec,
             )
 
         elif credentials and credentials.type is CredentialsType.secret:
-            raise ZwaveUnexpectedError(
-                "Z-Wave does not support secret-based pairing credentials"
-            )
+            raise ZwaveUnexpectedError("Z-Wave does not support secret-based pairing credentials")
 
         else:
             await controller.async_begin_inclusion(InclusionStrategy.DEFAULT)
@@ -222,17 +205,13 @@ class ZwaveController(AbstractController):
 
         self._create_task(self._close_pairing_window(duration_sec))
 
-    async def pair_device(
-        self, discovery: Discovery, credentials: ProvidedCredentials | None
-    ) -> UUID:
+    async def pair_device(self, discovery: Discovery, credentials: ProvidedCredentials | None) -> UUID:
         """Waits for the pending node's interview to finish, then builds and saves the device."""
         self._require_client()
 
         node = self._awaiting_zw_discoveries.pop(discovery.id, None)
         if node is None:
-            raise ZwaveUnexpectedError(
-                f"No pending Z-Wave discovery for {discovery.id}"
-            )
+            raise ZwaveUnexpectedError(f"No pending Z-Wave discovery for {discovery.id}")
         self._majordom_discoveries.pop(discovery.id, None)
 
         await self._wait_until_ready(node)
@@ -248,21 +227,15 @@ class ZwaveController(AbstractController):
             if device.integration_data:
                 device.integration_data.node_id = node.node_id
             else:
-                device.integration_data = ZwaveDeviceIntegrationData(
-                    node_id=node.node_id
-                )
+                device.integration_data = ZwaveDeviceIntegrationData(node_id=node.node_id)
 
             parameters = self._build_parameters(device_id, node)
             device.parameters = parameters
 
-            main_parameter_id, default_value = self._mapper.get_main_parameter(
-                device_id, node
-            )
+            main_parameter_id, default_value = self._mapper.get_main_parameter(device_id, node)
             device.main_parameter = main_parameter_id
             if main_parameter_id and default_value is not None:
-                main_parameter = next(
-                    (p for p in parameters if p.id == main_parameter_id), None
-                )
+                main_parameter = next((p for p in parameters if p.id == main_parameter_id), None)
                 if main_parameter is None:
                     device.main_parameter = None
                 else:
@@ -347,29 +320,18 @@ class ZwaveController(AbstractController):
             (
                 v
                 for v in zwave_node.values.values()
-                if v.command_class
-                in (CommandClass.SWITCH_BINARY, CommandClass.SWITCH_MULTILEVEL)
+                if v.command_class in (CommandClass.SWITCH_BINARY, CommandClass.SWITCH_MULTILEVEL)
                 and v.property_ == "targetValue"
             ),
             None,
         )
         if switch_value is None:
-            raise ZwaveUnexpectedError(
-                f"Node {zwave_node.node_id} supports neither Indicator CC nor a switch to blink"
-            )
+            raise ZwaveUnexpectedError(f"Node {zwave_node.node_id} supports neither Indicator CC nor a switch to blink")
 
-        current_value = zwave_node.values.get(
-            switch_value.value_id.replace("targetValue", "currentValue")
-        )
-        restore_value = (
-            current_value.value
-            if current_value and current_value.value is not None
-            else 0
-        )
+        current_value = zwave_node.values.get(switch_value.value_id.replace("targetValue", "currentValue"))
+        restore_value = current_value.value if current_value and current_value.value is not None else 0
 
-        on_value = (
-            0xFF if switch_value.command_class == CommandClass.SWITCH_BINARY else 99
-        )
+        on_value = 0xFF if switch_value.command_class == CommandClass.SWITCH_BINARY else 99
         for _ in range(10):
             await zwave_node.async_set_value(switch_value, 0)
             await asyncio.sleep(0.6)
@@ -395,24 +357,16 @@ class ZwaveController(AbstractController):
 
         await self.dependencies.output.controller_did_receive_events(self, parameters)
 
-    async def send_command(
-        self, command: DeviceCommand, device: ZwaveDevice, parameter: ZwaveParameter
-    ):
+    async def send_command(self, command: DeviceCommand, device: ZwaveDevice, parameter: ZwaveParameter):
         self._require_client()
 
         zwave_node = self._require_node(device)
-        zwave_value = self._require_value(
-            parameter.integration_data.value_id, zwave_node
-        )
+        zwave_value = self._require_value(parameter.integration_data.value_id, zwave_node)
         if zwave_value.metadata.writeable is False:
-            raise ZwaveUnexpectedError(
-                f"Value {parameter.integration_data.value_id} is not writeable"
-            )
+            raise ZwaveUnexpectedError(f"Value {parameter.integration_data.value_id} is not writeable")
         try:
             awake = zwave_node.status != NodeStatus.ASLEEP
-            result = await zwave_node.async_set_value(
-                zwave_value, command.value, wait_for_result=awake
-            )
+            result = await zwave_node.async_set_value(zwave_value, command.value, wait_for_result=awake)
             log.info(result)
         except Exception as e:  # noqa: BLE001
             raise ZwaveUnexpectedError(
@@ -428,11 +382,7 @@ class ZwaveController(AbstractController):
 
         await self.dependencies.output.controller_did_receive_events(
             self,
-            [
-                DeviceParameterChange(
-                    device_id=device.id, parameter_id=parameter.id, value=command.value
-                )
-            ],
+            [DeviceParameterChange(device_id=device.id, parameter_id=parameter.id, value=command.value)],
         )
 
     # =========================================================================
@@ -467,9 +417,7 @@ class ZwaveController(AbstractController):
     def _require_value(self, value_id: str, node: Node) -> Value:
         value = node.values.get(value_id)
         if not value:
-            raise ZwaveUnexpectedError(
-                f"Value with {value_id} id for node {node.node_id} not found"
-            )
+            raise ZwaveUnexpectedError(f"Value with {value_id} id for node {node.node_id} not found")
         return value
 
     # -------------------------------------------------------------------------
@@ -526,19 +474,14 @@ class ZwaveController(AbstractController):
         finally:
             unsubscribe()
 
-    def _build_parameters(
-        self, device_id: UUID, node: Node
-    ) -> list[ZwaveParameterState]:
+    def _build_parameters(self, device_id: UUID, node: Node) -> list[ZwaveParameterState]:
         """Maps every Z-Wave value on a node into a majordom parameter state."""
         parameters: list[ZwaveParameterState] = []
         for value_id, value in node.values.items():
             metadata = value.metadata
             parameter = ZwaveParameterState(
                 id=self._mapper.parameter_uuid(device_id, value_id),
-                name=metadata.label
-                or value.property_name
-                or value.property_key_name
-                or str(value.property_),
+                name=metadata.label or value.property_name or value.property_key_name or str(value.property_),
                 data_type=self._mapper.parse_zwave_data_type(value),
                 role=self._mapper.get_role(value.command_class, metadata),
                 visibility=self._mapper.get_visibility(value.command_class, metadata),
@@ -590,9 +533,7 @@ class ZwaveController(AbstractController):
             expiration=None,
             transport=NonEmptyStr("ZWAVE"),
             device_manufacturer=None,
-            device_name=NonEmptyStr(
-                node.name or node.device_config.description or "Unknown"
-            ),
+            device_name=NonEmptyStr(node.name or node.device_config.description or "Unknown"),
             device_category=None,
             device_icon=None,
         )
@@ -614,18 +555,14 @@ class ZwaveController(AbstractController):
             return
         self._availability[device_id] = available
         if available:
-            await self.dependencies.output.controller_did_connect_device(
-                self, device_id
-            )
+            await self.dependencies.output.controller_did_connect_device(self, device_id)
         else:
             await self.dependencies.output.controller_did_lose_device(self, device_id)
 
     def _subscribe(self, device_id: UUID, node: Node) -> None:
         node.on(
             "value updated",
-            lambda data: self._create_task(
-                self._value_updated(device_id, data["value"])
-            ),
+            lambda data: self._create_task(self._value_updated(device_id, data["value"])),
         )
         node.on(
             "dead",

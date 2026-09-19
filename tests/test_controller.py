@@ -46,9 +46,7 @@ async def test_pairs_a_discovered_device(
     assert paired.integration_data is not None
     assert paired.integration_data.node_id == NODE_ID
     assert state is not None
-    assert state.parameters, (
-        "Expected at least one parameter to be mapped during pairing"
-    )
+    assert state.parameters, "Expected at least one parameter to be mapped during pairing"
 
 
 async def test_fetches_state(
@@ -79,10 +77,7 @@ async def test_fetches_state(
     new_events = output.events[events_before:]
 
     assert any(
-        isinstance(e, DeviceParameterChange)
-        and e.device_id == device.id
-        and e.value is True
-        for e in new_events
+        isinstance(e, DeviceParameterChange) and e.device_id == device.id and e.value is True for e in new_events
     ), "fetch() never reported the current value back to the Hub"
     await controller.stop()
 
@@ -99,20 +94,14 @@ async def test_sends_a_command(
         device = devices[0]
         state = await repo.state(device.id, as_=ZwaveDeviceState)
         assert state is not None
-        parameter_state = next(
-            p for p in state.parameters if p.id == state.main_parameter
-        )
+        parameter_state = next(p for p in state.parameters if p.id == state.main_parameter)
         parameter = ZwaveParameter.model_validate(parameter_state.model_dump())
 
         command = DeviceCommand(device_id=device.id, parameter_id=parameter.id, value=0)
         await controller.send_command(command, device, parameter)
         await controller.stop()
 
-    sent = [
-        c
-        for c in virtual_zwave.async_send_command.call_args_list
-        if c.args[0].get("command") == "node.set_value"
-    ]
+    sent = [c for c in virtual_zwave.async_send_command.call_args_list if c.args[0].get("command") == "node.set_value"]
     assert sent, "Controller never sent a node.set_value command to the device"
     assert sent[-1].args[0]["value"] == 0
 
@@ -130,14 +119,8 @@ async def test_identifies(
         await controller.identify(device)
     await controller.stop()
 
-    sent = [
-        c
-        for c in virtual_zwave.async_send_command.call_args_list
-        if c.args[0].get("command") == "node.set_value"
-    ]
-    assert sent, (
-        "controller.identify() never sent a node.set_value command to the device"
-    )
+    sent = [c for c in virtual_zwave.async_send_command.call_args_list if c.args[0].get("command") == "node.set_value"]
+    assert sent, "controller.identify() never sent a node.set_value command to the device"
 
 
 async def test_unpairs(
