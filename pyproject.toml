@@ -1,5 +1,5 @@
 [project]
-name = "integration-zwave"
+name = "majordom-zwave"
 version = "0.1.0"
 description = "Zwave integration for MajorDom — bridges Zwave devices into the MajorDom language."
 authors = [{ name = "Mark Parker", email = "mark@parker-programs.com" }]
@@ -107,7 +107,7 @@ echo "\nRunning ty:"
 poetry run ty check || code=1
 
 echo "\nRunning pytest:"
-poetry run pytest --cov=integration_template --cov-report=xml || code=1
+poetry run pytest --cov=majordom_zwave --cov-report=xml || code=1
 
 echo "\nRunning poetry build:"
 poetry build || code=1
