@@ -2,6 +2,7 @@
 Client the controller creates becomes an in-memory stub instead of hitting a
 real server. Everything else (Driver/Controller/Node/Value) is the real library.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,18 +18,33 @@ from zwave_js_server.model.node import Node
 from zwave_js_server.model.node.data_model import NodeDataType
 
 _LOG_CONFIG: LogConfigDataType = {
-    "enabled": True, "level": "info", "logToFile": False,
-    "filename": "", "forceConsole": False,
+    "enabled": True,
+    "level": "info",
+    "logToFile": False,
+    "filename": "",
+    "forceConsole": False,
 }
 
 _DEFAULT_CONTROLLER_STATE: dict[str, Any] = {
     "controller": {
-        "sdkVersion": "Z-Wave 3.95", "type": 1, "homeId": 1, "ownNodeId": 1,
-        "isSecondary": False, "isUsingHomeIdFromOtherNetwork": False,
-        "isSISPresent": True, "wasRealPrimary": True, "isStaticUpdateController": True,
-        "isSlave": False, "firmwareVersion": "1.0", "manufacturerId": 1,
-        "productType": 1, "productId": 1, "supportedFunctionTypes": [],
-        "sucNodeId": 1, "supportsTimers": False, "isRebuildingRoutes": False,
+        "sdkVersion": "Z-Wave 3.95",
+        "type": 1,
+        "homeId": 1,
+        "ownNodeId": 1,
+        "isSecondary": False,
+        "isUsingHomeIdFromOtherNetwork": False,
+        "isSISPresent": True,
+        "wasRealPrimary": True,
+        "isStaticUpdateController": True,
+        "isSlave": False,
+        "firmwareVersion": "1.0",
+        "manufacturerId": 1,
+        "productType": 1,
+        "productId": 1,
+        "supportedFunctionTypes": [],
+        "sucNodeId": 1,
+        "supportsTimers": False,
+        "isRebuildingRoutes": False,
         "inclusionState": 0,
     },
     "nodes": [],
@@ -38,23 +54,35 @@ _DEFAULT_VALUE_METADATA = {"type": "boolean", "readable": True, "writeable": Tru
 
 _DEFAULT_NODE_VALUES: list[dict[str, Any]] = [
     {
-        "commandClass": 37, "commandClassName": "Binary Switch", "endpoint": 0,
-        "property": "currentValue", "propertyName": "currentValue",
-        "value": False, "ccVersion": 1,
+        "commandClass": 37,
+        "commandClassName": "Binary Switch",
+        "endpoint": 0,
+        "property": "currentValue",
+        "propertyName": "currentValue",
+        "value": False,
+        "ccVersion": 1,
         "metadata": {"type": "boolean", "readable": True, "writeable": False, "label": "Current value"},
     },
     {
-        "commandClass": 37, "commandClassName": "Binary Switch", "endpoint": 0,
-        "property": "targetValue", "propertyName": "targetValue",
-        "value": False, "ccVersion": 1,
+        "commandClass": 37,
+        "commandClassName": "Binary Switch",
+        "endpoint": 0,
+        "property": "targetValue",
+        "propertyName": "targetValue",
+        "value": False,
+        "ccVersion": 1,
         "metadata": {"type": "boolean", "readable": True, "writeable": True, "label": "Target value"},
     },
 ]
 
 _DEFAULT_NODE_ENDPOINTS: list[dict[str, Any]] = [
-    {"index": 0, "deviceClass": None, "commandClasses": [
-        {"id": 37, "name": "Binary Switch", "version": 1, "isSecure": False},
-    ]},
+    {
+        "index": 0,
+        "deviceClass": None,
+        "commandClasses": [
+            {"id": 37, "name": "Binary Switch", "version": 1, "isSecure": False},
+        ],
+    },
 ]
 
 # Client.async_send_command's return value IS the server message's "result"
@@ -126,17 +154,13 @@ class VirtualZwaveNetwork:
             p.stop()
 
     def _connected_client(self) -> Client:
-        assert self._client is not None, (
-            "virtual_zwave used before controller.start() ran"
-        )
+        assert self._client is not None, "virtual_zwave used before controller.start() ran"
         return self._client
 
     @property
     def controller(self):
         client = self._connected_client()
-        assert client.driver is not None, (
-            "virtual_zwave.controller accessed before controller.start() ran"
-        )
+        assert client.driver is not None, "virtual_zwave.controller accessed before controller.start() ran"
         return client.driver.controller
 
     def node_found(self, node_id: int) -> None:
@@ -145,7 +169,7 @@ class VirtualZwaveNetwork:
     def node_joined(self, node_data: dict) -> Node:
         payload: dict[str, Any] = {
             "status": 4,  # NodeStatus.ALIVE, not 1 (ASLEEP) -- ASLEEP makes
-                           # async_send_command silently switch to no_wait
+            # async_send_command silently switch to no_wait
             "ready": True,
             "interviewStage": "Complete",
             "endpoints": _DEFAULT_NODE_ENDPOINTS,
@@ -176,19 +200,22 @@ class VirtualZwaveNetwork:
         metadata: dict | None = None,
     ) -> None:
         node = self.controller.nodes[node_id]
-        event = Event("value updated", {
-            "source": "node",
-            "event": "value updated",
-            "nodeId": node_id,
-            "args": {
-                "commandClass": command_class,
-                "commandClassName": command_class_name,
-                "endpoint": endpoint,
-                "property": property,
-                "propertyName": property_name or str(property),
-                "newValue": new_value,
-                "prevValue": prev_value,
-                "metadata": metadata or _DEFAULT_VALUE_METADATA,
+        event = Event(
+            "value updated",
+            {
+                "source": "node",
+                "event": "value updated",
+                "nodeId": node_id,
+                "args": {
+                    "commandClass": command_class,
+                    "commandClassName": command_class_name,
+                    "endpoint": endpoint,
+                    "property": property,
+                    "propertyName": property_name or str(property),
+                    "newValue": new_value,
+                    "prevValue": prev_value,
+                    "metadata": metadata or _DEFAULT_VALUE_METADATA,
+                },
             },
-        })
+        )
         node.receive_event(event)
