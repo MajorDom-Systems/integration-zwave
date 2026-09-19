@@ -106,7 +106,6 @@ class ZwaveController(AbstractController):
             "node removed",
             lambda data: self._create_task(self._node_removed(data["node"])),
         )
-        # S2 auto-grant only — no PIN prompt / no discovery raised for it.
         controller.on(
             "grant security classes",
             lambda data: self._create_task(
@@ -483,19 +482,33 @@ class ZwaveController(AbstractController):
         await controller.async_stop_inclusion()
         log.debug("[PAIRING] inclusion window closed")
 
-        # Anything discovered but never claimed via pair_device gets dropped.
+        # Anything discovered but never claimed via pair_device: try to undo the
+        # inclusion. Only forget the discovery if the node actually left the
+        # network -- otherwise it's still a real Z-Wave node and the user must
+        # still be able to pair it (or explicitly remove it) later.
         for device_id in list(self._majordom_discoveries):
-            self._majordom_discoveries.pop(device_id, None)
-            node = self._awaiting_zw_discoveries.pop(device_id, None)
+            node = self._awaiting_zw_discoveries.get(device_id)
             if node is None:
+                # Nothing to reconcile against -- drop the stale discovery entry.
+                self._majordom_discoveries.pop(device_id, None)
                 continue
-            if await controller.async_is_failed_node(node):
-                await controller.async_remove_failed_node(node)
-            else:
+
+            if not await controller.async_is_failed_node(node):
                 log.warning(
-                    "[PAIRING] node_id=%s joined but was never paired, can't force-remove while alive",
+                    "[PAIRING] node_id=%s joined but was never paired and is still "
+                    "alive on the network -- keeping the discovery so the user can "
+                    "pair or remove it",
                     node.node_id,
                 )
+                continue
+
+            await controller.async_remove_failed_node(node)
+            self._majordom_discoveries.pop(device_id, None)
+            self._awaiting_zw_discoveries.pop(device_id, None)
+            log.debug(
+                "[PAIRING] node_id=%s force-removed after failing to pair in time",
+                node.node_id,
+            )
 
     async def _wait_until_ready(self, node: Node) -> None:
         """Waits for the background interview to populate node.values."""
