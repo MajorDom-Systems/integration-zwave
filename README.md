@@ -64,8 +64,8 @@ the same server Home Assistant's Z-Wave JS integration uses. `zwave-js-server` i
 the serial connection to the Z-Wave USB controller and speaks the Z-Wave protocol; this integration
 just talks JSON over a WebSocket to it.
 
-- Run `zwave-js-server` yourself (commonly via Docker, `ghcr.io/zwave-js/zwave-js-server`) on
-  whatever machine has the Z-Wave USB controller attached.
+- Run `zwave-js-server` yourself (commonly via Docker) on whatever machine has the Z-Wave USB
+  controller attached.
 - Point this integration at it with the `ZWAVE_SERVER_URL` environment variable
   (e.g. `ws://localhost:3000`) — see `majordom_zwave/config.py`.
 
@@ -76,14 +76,16 @@ just talks JSON over a WebSocket to it.
 - **Transport(s):** Z-Wave (sub-GHz RF mesh).
 - **Supported devices:** any Z-Wave / Z-Wave Plus device exposing standard Command Classes
   (Binary/Multilevel Switch, Indicator, etc.) that Z-Wave JS supports.
-- **Credentials needed to pair:** `none` (S0 / unauthenticated inclusion), `code` (S2 PIN), or
-  `qr` (S2 SmartStart / DSK QR code). `secret` is not supported.
+- **Credentials needed to pair:** none for the Hub's pairing flow — `Discovery` always advertises
+  `CredentialsType.none`. S2 `code` (PIN) and `qr` (DSK) are supported, but must be supplied when
+  *opening the pairing window*, not at `pair_device` time — Z-Wave needs them during inclusion,
+  before the node exists as a discovery. `secret` is not supported.
 
 ### Required harness
 
-- **Hardware adapters:** a Z-Wave USB controller (e.g. Aeotec Z-Stick, Zooz ZST10) — but it's
-  attached to whatever host runs `zwave-js-server`, not necessarily the Hub. This integration
-  doesn't use `dependencies.hardware_interfaces`; the radio is abstracted behind the server.
+- **Hardware adapters:** a Z-Wave USB controller (e.g. Aeotec/Zooz Z-Stick) — but it's attached to
+  whatever host runs `zwave-js-server`, not necessarily the Hub. This integration doesn't use
+  `dependencies.hardware_interfaces`; the radio is abstracted behind the server.
 - **Third-party software services:** [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
   (Node.js) must be running and reachable at `ZWAVE_SERVER_URL`.
 - **OS / permissions:** network reachability (TCP) to the `zwave-js-server` host:port. No special
@@ -98,6 +100,16 @@ just talks JSON over a WebSocket to it.
 | Application | Z-Wave Command Classes (CC) | `zwave-js-server` (external Node.js service) |
 | Network / MAC / PHY | Z-Wave mesh, sub-GHz RF | Z-Wave USB controller + its driver (harness) |
 
+### Manual testing (real hardware)
+
+Verified against real hardware, not just the virtual-device test suite:
+
+- **Z-Wave controller:** Z-Stick 7 (ZWA010)
+- **Test device:** HKZW-RGB01 v1.0 (RGB bulb)
+
+Ran the same lifecycle as `tests/test_controller.py` — pairing, `fetch`, `send_command`,
+`identify`, and `unpair` — all completed successfully.
+
 ### Progress
 
 **Implementation** — makes the integration functional:
@@ -107,7 +119,7 @@ just talks JSON over a WebSocket to it.
       `controller_did_receive_discovery` called
 - [ ] Discovery of already-paired devices on reconnect — currently `start()` marks known devices
       available internally on startup without going through `controller_did_connect_device` (see Notes)
-- [x] `start_pairing_window` (default S0, S2 PIN, S2 QR/SmartStart, auto-grant of requested
+- [x] `start_pairing_window` (default, S2 PIN, S2 QR/SmartStart, auto-grant of requested
       security classes with no user prompt)
 - [x] Device pairing
 - [x] Device schema mapped (via `ZwaveMapper`: values → parameters, role/visibility/units)
@@ -120,7 +132,8 @@ just talks JSON over a WebSocket to it.
       `controller_did_connect_device`) — `last_error` isn't set/cleared on these specific
       transitions though (see Notes)
 - [x] Graceful shutdown in `stop` (tasks cancelled, client disconnected, session closed)
-- [x] Tests pass against a virtual/simulated device (`tests/test_controller.py`)
+- [x] Tests pass against a virtual/simulated device (`tests/test_controller.py`) and against real
+      hardware (see **Manual testing** above)
 
 **Quality** — makes it reliable and maintainable (the bar for release):
 
@@ -136,14 +149,15 @@ just talks JSON over a WebSocket to it.
 - [x] **Stable identity** — device/parameter UUIDs derived via `ZwaveMapper`'s SDK-backed helpers
 - [x] **End-to-end tests** drive pair → command → fetch → events → `unpair` against a virtual device
 - [ ] **Failure paths tested** — offline device / transport error / rejected credentials not covered yet
-- [ ] **Broad device coverage** — only a single virtual Binary Switch device is exercised in CI
-- [ ] **Fully typed** (`ty`) and **clean** (`poe check`) — TODO: confirm with a clean `poe check` run
+- [ ] **Broad device coverage** — one virtual device type in CI, one real device manually
+- [x] **Fully typed** (`ty`) and **clean** (`poe check`) — ruff, ty, pytest, and
+      `poetry build`/`check` all pass
 - [x] **Readable & structured** — conversion logic lives in `ZwaveMapper`, models separated
 - [x] **Efficient** — subscription-based (`"value updated"`/`"dead"`/`"alive"`), not polling
 - [ ] **Diagnosable** — decent per-area log tags (`[PAIR]`, `[CMD]`, `[JOIN]`, …), but
       `send_command`'s exception handler re-raises with `from None`, discarding the original traceback
 - [x] **Rich parameter metadata** — role/visibility/`main_parameter` resolved per value via `ZwaveMapper`
-- [ ] **Owned** — TODO: add a listed maintainer
+- [ ] **Owned** — add a listed maintainer
 - [ ] _nice-to-have:_ localizable naming · firmware/software updates · user-facing supported-device docs
 
 ### Notes
