@@ -187,8 +187,6 @@ the mock network only; to be re-run on hardware before release):
 
 - Z-Wave discovery doesn't use `zeroconf`/`ssdp`/`ble`: nodes are surfaced from `zwave-js-server`'s own events.
 - QR inclusion is not covered end to end (the mock network has no QR flow); malformed codes are tested.
-- A main parameter's set `default_value` (e.g. `{0, 100}`) comes back from the SDK's repository as a list: an SDK
-  issue (`set[V] | V` with an unbound `V`), not this integration's.
 
 ## License
 

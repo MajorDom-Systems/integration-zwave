@@ -83,8 +83,8 @@ async def test_a_level_is_a_percentage(
     )
     assert level.integration_data.state_value_id is not None
     assert device.main_parameter == level.id
-    # a tap toggles off / fully on, within the declared range (a set: the SDK's repository round-trip returns a list)
-    assert level.default_value is not None and set(level.default_value) == {0, 100}
+    assert level.default_value == {0, 100}  # a tap toggles off / fully on, within the declared range
+    assert level.main_cycle == [0, 100]
 
 
 async def test_scene_activations_are_events(
