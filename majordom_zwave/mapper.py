@@ -1,5 +1,11 @@
+"""Z-Wave values → MajorDom parameters, and value conversion both ways.
+
+A parameter is one Z-Wave value, except for current/target pairs (`currentValue`/`targetValue`,
+`currentMode`/`targetMode`, ...): those are one parameter, commanded through the target and reporting the
+current one, so the user sees one switch rather than a "Current value" sensor next to a "Target value" control.
+"""
+
 from typing import Any
-from uuid import NAMESPACE_DNS, UUID, uuid5
 
 from majordom_integration_sdk.schemas.parameter import (
     ParameterDataType,
@@ -7,137 +13,188 @@ from majordom_integration_sdk.schemas.parameter import (
     ParameterUnit,
     ParameterVisibility,
 )
+from zwave_js_server.const import CommandClass
 from zwave_js_server.model.duration import Duration
 from zwave_js_server.model.node import Node
-from zwave_js_server.model.value import (
-    AllowedRangeValue,
-    Value,
-    ValueMetadata,
-    ValueType,
-)
+from zwave_js_server.model.value import AllowedRangeValue, Value, ValueType
 
 from .zwave_spec import (
+    CONVERTED_UNITS,
+    DECIMAL_COMMAND_CLASSES,
     DIAGNOSTIC_COMMAND_CLASSES,
     EVENT_COMMAND_CLASSES,
+    LEVEL_COMMAND_CLASSES,
+    LEVEL_PROPERTIES,
     MAIN_VALUE_BY_COMMAND_CLASS,
     SYSTEM_COMMAND_CLASSES,
     UNIT_MAP,
 )
 
 
-class ZwaveMapper:
-    def device_uuid_from_node_id(self, node_id: int) -> UUID:
-        return uuid5(NAMESPACE_DNS, f"device-{node_id}")
+def parameter_values(node: Node) -> list[tuple[Value, Value | None]]:
+    """(value commanded and identifying the parameter, value its state comes from when another one) per parameter."""
+    states = {target.value_id: current for target in node.values.values() if (current := _current_of(node, target))}
+    merged = {current.value_id for current in states.values()}
+    return [(value, states.get(value.value_id)) for value in node.values.values() if value.value_id not in merged]
 
-    def parameter_uuid(self, device_id: UUID, value_id: str) -> UUID:
-        return uuid5(NAMESPACE_DNS, f"parameter-{device_id}-{value_id}")
 
-    # -------------------------------------------------------------------------
-    # Value metadata -> SDK parameter schema
-    # -------------------------------------------------------------------------
+def reported_parameters(node: Node) -> dict[str, str | None]:
+    """Value id → the value id of the parameter it reports, None for a target whose state comes from its current."""
+    routes: dict[str, str | None] = {}
+    for value, state in parameter_values(node):
+        routes[value.value_id] = None if state else value.value_id
+        if state:
+            routes[state.value_id] = value.value_id
+    return routes
 
-    def get_unit(self, raw_unit: str | None) -> ParameterUnit | None:
-        """Maps a raw unit string to ParameterUnit; None if not in UNIT_MAP."""
-        if not raw_unit:
-            return None
-        return UNIT_MAP.get(raw_unit)
 
-    def _is_duration_property(self, value: Value) -> bool:
-        """True for CC-specific "duration" properties, matched by name since
-        zwave-js-server-python doesn't wrap them in its Duration class."""
-        return value.property_name == "duration" or value.property_ == "duration"
-
-    def format_zwave_value(self, value: Value) -> Any:
-        """Formats a raw value to match parse_zwave_data_type() — keep in sync."""
-        if self._is_duration_property(value):
-            # None means "unknown" here; Duration itself expects the string "unknown".
-            return str(Duration(value.value)) if value.value is not None else "unknown"
-        return value.value
-
-    def get_min_step(self, value: Value) -> int | float | None:
-        """Step size if zwave-js reported one; most devices don't, so no default."""
-        for entry in value.metadata.allowed or []:
-            if isinstance(entry, AllowedRangeValue) and entry.step:
-                return entry.step
+def _current_of(node: Node, target: Value) -> Value | None:
+    prop = target.property_
+    if not isinstance(prop, str) or not prop.startswith("target") or prop == "target":
         return None
+    current = f"current{prop.removeprefix('target')}"
+    return next(
+        (
+            v
+            for v in node.values.values()
+            if v.command_class == target.command_class
+            and v.endpoint == target.endpoint
+            and v.property_ == current
+            and v.property_key == target.property_key
+        ),
+        None,
+    )
 
-    def get_role(self, command_class: int, metadata: ValueMetadata) -> ParameterRole:
-        """Sensor/control/event from command class + read/write access."""
-        if command_class in EVENT_COMMAND_CLASSES:
-            return ParameterRole.event
-        if metadata.writeable:
-            return ParameterRole.control
-        return ParameterRole.sensor
 
-    def get_visibility(self, command_class: int, metadata: ValueMetadata) -> ParameterVisibility:
-        """Readable -> user, writeable-only -> setting, else system; SYSTEM/DIAGNOSTIC
-        command classes override this for plumbing/diagnostic values."""
-        if command_class in SYSTEM_COMMAND_CLASSES:
-            return ParameterVisibility.system
-        if command_class in DIAGNOSTIC_COMMAND_CLASSES:
-            return ParameterVisibility.setting
-        if metadata.readable or metadata.writeable:
-            return ParameterVisibility.user
+def name(value: Value, state: Value | None) -> str:
+    base = value.command_class_name if state else value.metadata.label or value.property_name or str(value.property_)
+    return f"{base} {value.endpoint}" if value.endpoint else base
+
+
+def _is_level(value: Value) -> bool:
+    return value.command_class in LEVEL_COMMAND_CLASSES and value.property_ in LEVEL_PROPERTIES
+
+
+def _is_duration(value: Value) -> bool:
+    # zwave-js-server-python's ValueType has no "duration": it is told by the metadata type string or the property
+    return value.metadata.type == "duration" or value.property_ == "duration"
+
+
+def data_type(value: Value) -> ParameterDataType:
+    metadata = value.metadata
+    if metadata.type == ValueType.BOOLEAN:
+        return ParameterDataType.bool
+    if metadata.type == ValueType.STRING or metadata.type == "color" or _is_duration(value):
+        return ParameterDataType.string
+    if metadata.type == ValueType.NUMBER:
+        if metadata.states and not metadata.allow_manual_entry:
+            return ParameterDataType.enum
+        return (
+            ParameterDataType.decimal if value.command_class in DECIMAL_COMMAND_CLASSES else ParameterDataType.integer
+        )
+    raw = value.value  # ValueType.ANY: only the value itself tells
+    if isinstance(raw, bool):
+        return ParameterDataType.bool
+    if isinstance(raw, int):
+        return ParameterDataType.integer
+    if isinstance(raw, float):
+        return ParameterDataType.decimal
+    if isinstance(raw, str):
+        return ParameterDataType.string
+    return ParameterDataType.data  # an opaque CC-specific object: exposed as data rather than a guessed shape
+
+
+def role(value: Value) -> ParameterRole:
+    if value.command_class in EVENT_COMMAND_CLASSES or value.metadata.stateful is False:
+        return ParameterRole.event
+    return ParameterRole.control if value.metadata.writeable else ParameterRole.sensor
+
+
+def visibility(value: Value, node: Node) -> ParameterVisibility:
+    command_class = value.command_class
+    if (
+        command_class in SYSTEM_COMMAND_CLASSES
+        or value.metadata.secret
+        or _is_duration(value)
+        or data_type(value) == ParameterDataType.data
+        or (command_class == CommandClass.BASIC and _has_other_application_values(node))
+    ):
         return ParameterVisibility.system
+    if command_class in DIAGNOSTIC_COMMAND_CLASSES:
+        return ParameterVisibility.setting
+    return ParameterVisibility.user
 
-    def parse_zwave_data_type(self, value: Value) -> ParameterDataType:
-        """Maps a Value to ParameterDataType. ValueType alone can't tell integer from
-        decimal/enum, or resolve ValueType.ANY, so those fall back to the raw value."""
-        metadata = value.metadata
 
-        if metadata.type == ValueType.BOOLEAN:
-            return ParameterDataType.bool
-        if metadata.type == ValueType.STRING:
-            return ParameterDataType.string
-        if metadata.type == ValueType.NUMBER:
-            if metadata.states:
-                return ParameterDataType.enum
-            raw = value.value
-            if isinstance(raw, float) and not raw.is_integer():
-                return ParameterDataType.decimal
-            return ParameterDataType.integer
+def _has_other_application_values(node: Node) -> bool:
+    """Basic CC only mirrors the device's real CCs (for old controllers): shown only when nothing else is."""
+    ignored = SYSTEM_COMMAND_CLASSES | DIAGNOSTIC_COMMAND_CLASSES | {CommandClass.BASIC}
+    return any(v.command_class not in ignored for v in node.values.values())
 
-        # ValueType.ANY: keep in sync with format_zwave_value's duration handling.
-        if self._is_duration_property(value):
-            return ParameterDataType.string
-        raw = value.value
-        if isinstance(raw, bool):
-            return ParameterDataType.bool
-        if isinstance(raw, int):
-            return ParameterDataType.integer
-        if isinstance(raw, float):
-            return ParameterDataType.decimal
-        if isinstance(raw, str):
-            return ParameterDataType.string
-        if isinstance(raw, dict):
-            return ParameterDataType.struct
-        # Opaque CC-specific object — expose as data rather than guessing a shape.
-        return ParameterDataType.data
 
-    def parse_zwave_valid_values(self, metadata: ValueMetadata) -> dict[int | float | str, str] | None:
-        """Converts states (`{"0": "Off"}`) to valid_values, coercing keys to int."""
-        if not metadata.states:
-            return None
-        result: dict[int | float | str, str] = {}
-        for raw_key, label in metadata.states.items():
-            try:
-                result[int(raw_key)] = label
-            except ValueError:
-                result[raw_key] = label
-        return result
+def unit(value: Value) -> ParameterUnit:
+    if _is_level(value):
+        return ParameterUnit.percentage
+    raw = value.metadata.unit or ""
+    if raw in CONVERTED_UNITS:
+        return CONVERTED_UNITS[raw][0]
+    return UNIT_MAP.get(raw, ParameterUnit.plain)
 
-    def get_main_parameter(self, device_id: UUID, node: Node) -> tuple[UUID | None, bool | int | float | None]:
-        """Picks the value for the device's one-tap action, by MAIN_VALUE_BY_COMMAND_CLASS
-        priority. Returns (None, None) if none applies."""
-        for command_class, spec in MAIN_VALUE_BY_COMMAND_CLASS.items():
-            value = next(
-                (
-                    v
-                    for v in node.values.values()
-                    if v.command_class == command_class and v.property_name == spec.property_name
-                ),
-                None,
-            )
-            if value is not None:
-                return self.parameter_uuid(device_id, value.value_id), spec.default_value
-        return None, None
+
+def limits(value: Value) -> tuple[Any, Any, Any]:
+    """(min, max, step) in MajorDom's units."""
+    if data_type(value) not in (ParameterDataType.integer, ParameterDataType.decimal):
+        return None, None, None
+    if _is_level(value):
+        return 0, 100, 1
+    step = next((a.step for a in value.metadata.allowed or [] if isinstance(a, AllowedRangeValue) and a.step), None)
+    return to_hub(value, value.metadata.min), to_hub(value, value.metadata.max), step
+
+
+def valid_values(value: Value) -> dict[int | float | str, str] | None:
+    """Enum labels: zwave-js `states` (`{"0": "Off"}`), keyed by the integer the value takes."""
+    if data_type(value) != ParameterDataType.enum or not value.metadata.states:
+        return None
+    result: dict[int | float | str, str] = {}
+    for key, label in value.metadata.states.items():
+        try:
+            result[int(key)] = label
+        except ValueError:
+            result[key] = label
+    return result
+
+
+def to_hub(value: Value, raw: Any) -> Any:
+    """A value as the device reports it → as MajorDom expresses it."""
+    if _is_duration(value):
+        return str(Duration(raw)) if raw is not None else "unknown"
+    if raw is None or isinstance(raw, bool) or not isinstance(raw, int | float):
+        return raw
+    if _is_level(value):
+        return 100 if raw == 99 else int(raw)  # 99 is fully on; above it are special values (255: last level)
+    converted = CONVERTED_UNITS.get(value.metadata.unit or "")
+    if converted:
+        _, factor, offset = converted
+        return round(raw * factor + offset, 2)
+    return raw
+
+
+def to_device(value: Value, hub: Any) -> Any:
+    """A value as MajorDom commands it → as the device takes it."""
+    if hub is None or isinstance(hub, bool) or not isinstance(hub, int | float):
+        return hub
+    if _is_level(value):
+        return 99 if hub >= 99 else int(hub)
+    converted = CONVERTED_UNITS.get(value.metadata.unit or "")
+    if converted:
+        _, factor, offset = converted
+        return round((hub - offset) / factor, 2)
+    return hub
+
+
+def main_value(node: Node) -> tuple[Value, Any] | None:
+    """The value of the device's one-tap action and what a tap sends, by MAIN_VALUE_BY_COMMAND_CLASS priority."""
+    for command_class, spec in MAIN_VALUE_BY_COMMAND_CLASS.items():
+        for value in node.values.values():
+            if value.command_class == command_class and value.property_ == spec.property_name:
+                return value, spec.default_value
+    return None

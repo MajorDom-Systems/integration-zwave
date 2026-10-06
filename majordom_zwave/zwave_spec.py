@@ -2,22 +2,16 @@
 
 Unlike Zigbee, zwave-js already reports `min`/`max`/`unit`/`states` directly on `ValueMetadata`,
 so this module only needs to cover what the wire format *doesn't* give us: which command classes
-are protocol plumbing or diagnostics-only, how to normalize zwave-js's freeform unit strings,
-and which property is a device's one-tap "main" action.
+are protocol plumbing or diagnostics-only, which report decimals or levels, how to normalize zwave-js's
+unit strings, and which property is a device's one-tap "main" action.
 
-Pure data only — the functions/methods that use these tables live on ZwaveMapper in mapper.py.
+Pure data only — the functions that use these tables live in mapper.py.
 """
 
 from dataclasses import dataclass
 
 from majordom_integration_sdk.schemas.parameter import ParameterUnit
 from zwave_js_server.const import CommandClass
-
-# The standard, cross-vendor Indicator CC value for "make the device blink so I can find it"
-# (Indicator CC spec, indicator id 0x50 "Node Identify"). Setting it triggers the device's own
-# built-in identify blink pattern and it self-resets — there's nothing to turn back off.
-IDENTIFY_INDICATOR_ID = 0x50
-
 
 # Protocol/network plumbing: never shown to the user, regardless of read/write access.
 # (association & multi channel wiring, security/transport encapsulation, inclusion, S2, etc.)
@@ -81,62 +75,79 @@ DIAGNOSTIC_COMMAND_CLASSES: frozenset[CommandClass] = frozenset(
     }
 )
 
-# CCs that report one-shot occurrences rather than a persistent state (button presses,
-# scene activations, alarms) — modeled as ParameterRole.event regardless of read/write flags.
+# CCs that report one-shot occurrences (button presses, scene activations) rather than a state — modeled as
+# ParameterRole.event. zwave-js marks such values `stateful: false` and sends them as "value notification".
+# Notification CC is not one: zwave-js models its variables as states with an idle value.
 EVENT_COMMAND_CLASSES: frozenset[CommandClass] = frozenset(
     {
         CommandClass.CENTRAL_SCENE,
         CommandClass.SCENE_ACTIVATION,
-        CommandClass.NOTIFICATION,
     }
 )
 
-# zwave-js's ValueMetadata.unit is a freeform string straight from the device's CC report, not a
-# controlled vocabulary — map the ones we recognize, leave the rest unmapped rather than guessed.
-# Extend this as new unit strings show up in the field.
+# Values these CCs report are scaled decimals by spec (a reading of 21.0 is still a decimal), so the type does not
+# depend on the value seen at pairing
+DECIMAL_COMMAND_CLASSES: frozenset[CommandClass] = frozenset(
+    {
+        CommandClass.SENSOR_MULTILEVEL,
+        CommandClass.METER,
+        CommandClass.THERMOSTAT_SETPOINT,
+        CommandClass.ENERGY_PRODUCTION,
+        CommandClass.HUMIDITY_CONTROL_SETPOINT,
+    }
+)
+
+# Levels 0-99 (99 is fully on) are percentages in MajorDom, as with Matter, Zigbee and ESPHome: 0-98 stay, 99 is 100
+LEVEL_COMMAND_CLASSES: frozenset[CommandClass] = frozenset({CommandClass.SWITCH_MULTILEVEL, CommandClass.BASIC})
+LEVEL_PROPERTIES: frozenset[str] = frozenset({"currentValue", "targetValue"})
+
+# zwave-js's ValueMetadata.unit is the unit string of the CC's scale (packages/core/src/registries/Scales.ts and
+# Meters.ts) — map the ones MajorDom has a unit for, leave the rest `plain` rather than guessed.
 UNIT_MAP: dict[str, ParameterUnit] = {
     "%": ParameterUnit.percentage,
     "s": ParameterUnit.second,
     "Hz": ParameterUnit.hertz,
     "kg": ParameterUnit.kilogram,
     "°": ParameterUnit.arcdegree,
-    "deg": ParameterUnit.arcdegree,
     "m": ParameterUnit.meters,
     "m/s": ParameterUnit.mps,
-    "m/s2": ParameterUnit.mps2,
+    "m/s²": ParameterUnit.mps2,
     "rpm": ParameterUnit.rpm,
     "N": ParameterUnit.newton,
     "J": ParameterUnit.joule,
+    "kWh": ParameterUnit.kwh,
     "W": ParameterUnit.watt,
     "°C": ParameterUnit.celsius,
     "K": ParameterUnit.kelvin,
     "V": ParameterUnit.volt,
     "A": ParameterUnit.ampere,
     "lx": ParameterUnit.lux,
+    "Lux": ParameterUnit.lux,
     "Pa": ParameterUnit.pascal,
     "ppm": ParameterUnit.ppm,
+    "µg/m³": ParameterUnit.ugm3,
     "b": ParameterUnit.bytes,
     "B": ParameterUnit.bytes,
-    # Deliberately unmapped (no ParameterUnit equivalent yet — falls back to `plain`):
-    # "kWh" (energy-over-time, not instantaneous joule), "dB"/"dBm" (log scale), "UV index".
+}
+
+# Units MajorDom has no unit for, converted to one it has: (unit, factor, offset), hub value = raw * factor + offset
+CONVERTED_UNITS: dict[str, tuple[ParameterUnit, float, float]] = {
+    "°F": (ParameterUnit.celsius, 5 / 9, -32 * 5 / 9),
+    "kPa": (ParameterUnit.pascal, 1000, 0),
 }
 
 
 @dataclass(frozen=True)
 class MainValueSpec:
-    """Identifies a device's one-tap main parameter and the value to send for it.
+    """Identifies a device's one-tap main parameter and what a tap does (`Parameter.default_value`).
 
-    Z-Wave has no invokable "commands" the way Zigbee/Matter clusters do — every action is a
-    property get/set — so every Z-Wave main parameter is attribute-like (the same shape as
-    Matter's FanControl case, the one cluster where Matter's own main parameter is attribute-type
-    too, rather than a command). `default_value` is what a tap sends when the app doesn't already
-    know the device's current state (e.g. right after pairing); once telemetry is flowing, the
-    app is expected to flip between the parameter's known states itself rather than always
-    sending this same value on every tap.
+    Z-Wave has no invokable "commands" the way Zigbee/Matter clusters do — every action is a property set — so
+    every main parameter is a value. `default_value` follows the SDK: None lets the data type decide (a bool
+    toggles), a set is cycled through (two values: a toggle), a single value is a button that always sends it.
     """
 
     property_name: str
-    default_value: bool | int | float
+    default_value: set[int] | None
 
 
 # Priority order matters: the first command class present on the node wins, same as
@@ -144,11 +155,11 @@ class MainValueSpec:
 # listed — e.g. Thermostat Mode is deliberately left out, since there's no single mode that's
 # the obviously-correct one-tap action across vendors.
 MAIN_VALUE_BY_COMMAND_CLASS: dict[CommandClass, MainValueSpec] = {
-    CommandClass.SWITCH_BINARY: MainValueSpec("targetValue", True),
-    # 255 = "restore last non-zero level" per the Multilevel Switch CC spec, i.e. "turn on".
-    CommandClass.SWITCH_MULTILEVEL: MainValueSpec("targetValue", 255),
-    # BarrierState.OPEN = 255.
-    CommandClass.BARRIER_OPERATOR: MainValueSpec("targetState", 255),
-    # DoorLockMode.SECURED = 255 — lock, not unlock, is the safer default one-tap action.
-    CommandClass.DOOR_LOCK: MainValueSpec("targetMode", 255),
+    CommandClass.SWITCH_BINARY: MainValueSpec("targetValue", None),
+    # Off and fully on, as percentages (see LEVEL_COMMAND_CLASSES).
+    CommandClass.SWITCH_MULTILEVEL: MainValueSpec("targetValue", {0, 100}),
+    # BarrierState CLOSED = 0, OPEN = 255.
+    CommandClass.BARRIER_OPERATOR: MainValueSpec("targetState", {0, 255}),
+    # DoorLockMode UNSECURED = 0, SECURED = 255: not a cycle through every mode the lock has.
+    CommandClass.DOOR_LOCK: MainValueSpec("targetMode", {0, 255}),
 }

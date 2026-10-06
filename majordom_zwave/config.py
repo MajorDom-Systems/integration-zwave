@@ -1,3 +1,6 @@
 import os
 
-zwave_server_url = os.getenv("ZWAVE-SERVER-URL", "ws://localhost:3000")
+
+def server_url() -> str:
+    """The zwave-js-server to connect to, read when the integration starts."""
+    return os.getenv("ZWAVE_SERVER_URL", "ws://localhost:3000")
