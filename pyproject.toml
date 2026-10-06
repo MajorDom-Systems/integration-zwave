@@ -1,12 +1,12 @@
 [project]
 name = "majordom-zwave"
 version = "0.1.0"
-description = "Zwave integration for MajorDom — bridges Zwave devices into the MajorDom language."
+description = "Z-Wave integration for MajorDom — bridges Z-Wave devices into the MajorDom language."
 authors = [{ name = "Mark Parker", email = "mark@parker-programs.com" }]
 readme = "README.md"
-license = "Apache-2.0"
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
-keywords = ["majordom", "zwave", "zwave-js-server-python", "smart-home", "home-automation", "iot", "integration"]
+keywords = ["majordom", "zwave", "z-wave", "zwave-js", "zwave-js-server-python", "smart-home", "home-automation", "iot", "integration"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -16,7 +16,7 @@ classifiers = [
 requires-python = ">=3.12"
 dependencies = [
     "majordom-integration-sdk (>=0.1.5,<1.0)",
-    "zwave-js-server-python (>=0.73.1,<0.74.0)",
+    "zwave-js-server-python (>=0.74.0,<0.75.0)",
 ]
 
 [project.urls]
