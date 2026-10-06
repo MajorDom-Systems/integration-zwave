@@ -1,0 +1,10 @@
+{
+  "name": "majordom-zwave-mock-network",
+  "private": true,
+  "description": "Mock Z-Wave network for the end-to-end tests: zwave-js's mock controller and nodes behind a real zwave-js-server",
+  "type": "module",
+  "dependencies": {
+    "@zwave-js/server": "3.11.0",
+    "zwave-js": "15.31.0"
+  }
+}
