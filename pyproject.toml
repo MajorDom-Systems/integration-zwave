@@ -1,6 +1,6 @@
 [project]
 name = "majordom-zwave"
-version = "0.1.1"
+version = "0.1.2"
 description = "Z-Wave integration for MajorDom — bridges Z-Wave devices into the MajorDom language."
 authors = [{ name = "Mark Parker", email = "mark@parker-programs.com" }]
 readme = "README.md"
