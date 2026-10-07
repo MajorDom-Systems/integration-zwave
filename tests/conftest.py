@@ -34,6 +34,12 @@ def fast(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def patient(fast: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Interviewing every capability of a CC takes the mock a few seconds (Notification, User Code)."""
+    monkeypatch.setattr(ZwaveController, "READY_TIMEOUT", 90.0)
+
+
+@pytest.fixture
 async def controller(deps: AbstractController.Dependencies, fast: None) -> AsyncIterator[ZwaveController]:
     controller = ZwaveController(deps)
     yield controller

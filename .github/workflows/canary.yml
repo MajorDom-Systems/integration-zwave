@@ -1,0 +1,45 @@
+name: Command-class catalogue canary
+
+# Monthly canary, like the Matter and ESPHome integrations'.
+#
+# PURPOSE: catch zwave-js / zwave-js-server / zwave-js-server-python changes this integration does not support yet.
+# Each run installs their LATEST releases (not the locked ones) and runs the whole suite, whose catalogue
+# (tests/test_catalogue.py) hosts one mock device per command class. It goes RED when upstream ships something
+# unsupported: a new command class, value metadata type or unit (the fast checks), or a new or changed value of a
+# hosted command class (the sweep). That is the signal to add support, or to explain why not.
+
+on:
+  schedule:
+    - cron: "0 4 1 * *" # monthly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install the project
+        run: (command -v poetry || pipx install poetry) && poetry install
+
+      - name: Upgrade to the latest zwave-js, zwave-js-server and zwave-js-server-python
+        run: |
+          npm ci --prefix tests/mock --no-audit --no-fund
+          npm install --prefix tests/mock --no-save --no-audit --no-fund zwave-js@latest @zwave-js/server@latest
+          poetry run pip install --upgrade zwave-js-server-python
+          npm ls --prefix tests/mock zwave-js @zwave-js/server
+          poetry run pip show zwave-js-server-python | head -2
+
+      - name: Whole suite, catalogue included
+        run: poetry run pytest -v

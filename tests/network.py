@@ -84,6 +84,17 @@ class MockNetwork:
     async def silence(self, node: int) -> None:
         await self.call("silence", node=node)
 
+    async def wake(self, node: int) -> None:
+        """A sleeping device wakes up: it takes its queued commands, then sleeps again."""
+        await self.call("wake", node=node)
+
+    async def power_on(self, node: int) -> None:
+        """A provisioned (SmartStart) device is powered on: it asks to join, and is included by its DSK."""
+        await self.call("power_on", node=node)
+
+    async def awake(self, node: int) -> bool:
+        return (await self.call("awake", node=node))["awake"]
+
     async def reject(self, node: int) -> None:
         """The node refuses the commands it gets (a supervised command is answered with a Fail status)."""
         await self.call("reject", node=node)

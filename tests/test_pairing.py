@@ -128,6 +128,16 @@ async def test_the_full_dsk_works_as_the_pin(
     param(device, BINARY_SWITCH)
 
 
+async def test_the_s2_qr_code_includes_securely(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    await controller.start()
+    qr = lambda label: ProvidedCredentials(type=CredentialsType.qr, value=label["qr"])  # noqa: E731
+    device = await pair(controller, output, network, 5, "secure", credentials=qr)
+
+    param(device, BINARY_SWITCH)  # only supported securely: present only if S2 bootstrapping succeeded
+
+
 async def test_without_the_pin_a_secure_device_joins_with_lower_security_and_says_so(
     controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
 ):
@@ -159,7 +169,11 @@ async def test_closing_the_window_keeps_live_unclaimed_devices_and_removes_faile
     await asyncio.sleep(1.5)
     assert alive.id in controller.discoveries
 
-    failed = await discover(controller, output, network, 6, "switch", duration=1)
+    failed = await discover(controller, output, network, 6, "switch", duration=3)
+    for _ in range(100):  # joined and interviewed (its state read) — then it fails, before anyone pairs it
+        if "BinarySwitchCCGet" in await network.frames(6):
+            break
+        await asyncio.sleep(0.05)
     await network.fail(6)
     await wait_until(lambda: failed.id in output.lost_discoveries, 10, "the failed node's discovery to be dropped")
     assert 6 not in await network.node_ids()

@@ -7,11 +7,25 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import { ZwavejsServer } from "@zwave-js/server";
-import { BinarySwitchCCReport, MultilevelSensorCCReport, SceneActivationCCSet } from "@zwave-js/cc";
-import { CommandClasses, SecurityClass, dskToString } from "@zwave-js/core";
 import {
+	BatteryCCReport,
+	BinarySwitchCCReport,
+	EntryControlCCNotification,
+	MultilevelSensorCCReport,
+	MultilevelSwitchCCStartLevelChange,
+	MultilevelSwitchCCStopLevelChange,
+	NotificationCCReport,
+	PowerlevelCCTestNodeReport,
+	SceneActivationCCSet,
+	WakeUpCCWakeUpNotification,
+} from "@zwave-js/cc";
+import { CommandClasses, SecurityClass, dskFromString, dskToString, nwiHomeIdFromDSK } from "@zwave-js/core";
+import {
+	AddNodeStatus,
 	AddNodeToNetworkRequest,
+	AddNodeToNetworkRequestStatusReport,
 	AddNodeType,
+	ApplicationUpdateRequestSmartStartHomeIDReceived,
 	IsFailedNodeRequest,
 	IsFailedNodeResponse,
 	RemoveFailedNodeRequest,
@@ -34,6 +48,8 @@ import {
 } from "@zwave-js/testing";
 import { Bytes } from "@zwave-js/shared";
 import { createAndStartDriverWithMockPort, createDefaultMockControllerBehaviors, createDefaultMockNodeBehaviors } from "zwave-js/Testing";
+
+import { BEHAVIORS, RECIPES, qrCode } from "./catalogue.mjs";
 
 // stdout carries the protocol only: the libraries' console output goes to stderr
 console.log = console.info = console.debug = console.warn = console.error;
@@ -95,19 +111,20 @@ const KINDS = {
 		CommandClasses["Security 2"],
 		ccCaps({ ccId: CommandClasses["Binary Switch"], version: 2, secure: true, defaultValue: false }),
 	],
+	...RECIPES, // the catalogue: one kind per command class (catalogue.mjs)
 };
 
 function capabilities(kind, options = {}) {
 	const make = KINDS[kind];
 	if (!make) throw new Error(`unknown node kind ${kind}`);
 	const made = make();
-	const { commandClasses, endpoints } = Array.isArray(made) ? { commandClasses: made } : made;
+	const { commandClasses, ...node } = Array.isArray(made) ? { commandClasses: made } : made; // node: endpoints, flags
 	return {
 		manufacturerId: 0xfff0,
 		productType: options.productType ?? 0x0001,
 		productId: options.productId ?? 0x0001,
 		commandClasses: [...BASE, ...commandClasses],
-		...(endpoints ? { endpoints } : {}),
+		...node,
 		...(kind === "secure"
 			? { securityClasses: new Set([options.access ? SecurityClass.S2_AccessControl : SecurityClass.S2_Authenticated]) }
 			: {}),
@@ -124,6 +141,9 @@ class Network {
 	silenced = new Set(); // node ids that stop responding (no ACK, no reply)
 	rejecting = new Set(); // node ids that refuse commands
 	removeCallbackId = undefined; // of the running exclusion, to complete it on request
+	adding = false; // an inclusion is running (see the AddNodeToNetworkRequest behaviors)
+	pendingDsk = undefined; // of the device waiting to join
+	sequence = 0; // of the keypad's notifications
 
 	async start(nodes) {
 		this.cacheDir = await mkdtemp(path.join(tmpdir(), "zwave-mock-"));
@@ -134,7 +154,10 @@ class Network {
 			S2_AccessControl: Bytes.from("33333333333333333333333333333333", "hex"),
 		};
 		const { driver, continueStartup, mockPort, serial } = await createAndStartDriverWithMockPort({
-			logConfig: { enabled: false },
+			// ZWAVE_MOCK_LOG=<file>: the driver's debug log, to see what zwave-js made of the mock (stdout is the protocol)
+			logConfig: process.env.ZWAVE_MOCK_LOG
+				? { enabled: true, level: "debug", logToFile: true, filename: process.env.ZWAVE_MOCK_LOG }
+				: { enabled: false },
 			securityKeys,
 			storage: { cacheDir: this.cacheDir, lockDir: path.join(this.cacheDir, "locks") },
 			testingHooks: { skipFirmwareIdentification: true },
@@ -166,8 +189,22 @@ class Network {
 	// by it, so the mock reads some requests' fields from the payload, and sets the replies' payload itself.
 	behaviors() {
 		const network = this;
-		let adding = false;
 		return [
+			{
+				// SmartStart, which the mock does not know: zwave-js listens for provisioned devices while it has some,
+				// and includes one by its DSK when it asks to join (`power_on`)
+				async onHostMessage(controller, msg) {
+					if (!(msg instanceof AddNodeToNetworkRequest)) return;
+					if (msg.addNodeType === AddNodeType.SmartStartListen) return true; // nothing to answer
+					if (msg.addNodeType !== AddNodeType.SmartStartDSK || !controller.nodePendingInclusion) return;
+					controller.state.set("inclusionState", 1); // the mock's AddingNode: its closing Stop reports Done
+					network.adding = true;
+					const ready = new AddNodeToNetworkRequestStatusReport({ callbackId: msg.callbackId, status: AddNodeStatus.Ready });
+					await controller.sendMessageToHost(ready);
+					void network.includePending(controller, msg.callbackId);
+					return true;
+				},
+			},
 			{
 				async onHostMessage(controller, msg) {
 					if (msg instanceof IsFailedNodeRequest) {
@@ -201,8 +238,8 @@ class Network {
 				async onHostMessage(controller, msg) {
 					if (!(msg instanceof AddNodeToNetworkRequest)) return;
 					const stop = msg.addNodeType === AddNodeType.Stop;
-					if (stop && !adding) return true;
-					adding = !stop;
+					if (stop && !network.adding) return true;
+					network.adding = !stop;
 					return false;
 				},
 			},
@@ -218,9 +255,10 @@ class Network {
 		];
 	}
 
-	nodeBehaviors(id) {
+	nodeBehaviors(id, kind) {
 		const network = this;
 		return [
+			...(BEHAVIORS[kind] ? [BEHAVIORS[kind](network, id)] : []), // what zwave-js's mock lacks for this kind
 			{
 				handleCC(controller, self, receivedCC) {
 					if (network.silenced.has(id)) return { action: "stop" }; // out of range: no answer
@@ -229,6 +267,26 @@ class Network {
 				},
 			},
 		];
+	}
+
+	/** The inclusion the default AddNode behavior runs, for a SmartStart inclusion (the device in nodePendingInclusion). */
+	async includePending(controller, callbackId) {
+		const { setup, ...options } = controller.nodePendingInclusion;
+		const node = await MockNode.create({ controller, ...options });
+		node.defineBehavior(...createDefaultMockNodeBehaviors());
+		setup?.(node);
+		const supportedCCs = [...node.implementedCCs].filter(([, info]) => info.isSupported && info.version > 0).map(([id]) => id);
+		const { basicDeviceClass, genericDeviceClass, specificDeviceClass } = node.capabilities;
+		const nodeInfo = { nodeId: node.id, basicDeviceClass, genericDeviceClass, specificDeviceClass, supportedCCs };
+		const report = (status, extra = {}) =>
+			controller.sendMessageToHost(new AddNodeToNetworkRequestStatusReport({ callbackId, status, ...extra }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		await report(AddNodeStatus.NodeFound);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		await report(AddNodeStatus.AddingSlave, { nodeInfo });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		controller.addNode(node);
+		await report(AddNodeStatus.ProtocolDone);
 	}
 
 	silence(id, silent) {
@@ -242,7 +300,7 @@ class Network {
 	async createNode(id, kind, options) {
 		const node = await MockNode.create({ id, controller: this.controller, capabilities: capabilities(kind, options) });
 		node.defineBehavior(...createDefaultMockNodeBehaviors());
-		node.defineBehavior(...this.nodeBehaviors(id)); // checked before the defaults
+		node.defineBehavior(...this.nodeBehaviors(id, kind)); // checked before the defaults
 		return node;
 	}
 
@@ -275,13 +333,16 @@ class Network {
 					capabilities: caps,
 					setup(node) {
 						node.ecdhKeyPair = probe.ecdhKeyPair;
-						node.defineBehavior(...network.nodeBehaviors(id));
+						node.defineBehavior(...network.nodeBehaviors(id, request.kind));
 						node.autoAckControllerFrames = !network.silenced.has(id);
 					},
 				};
 				// as zwave-js reads it from the key the node sends: its first 16 bytes (MockNode.dsk skips one byte)
 				const dsk = dskToString(probe.ecdhKeyPair.publicKey.slice(0, 16));
-				return { pin: dsk.slice(0, 5), dsk };
+				const keys = [...(caps.securityClasses ?? [])].reduce((mask, c) => mask | (1 << c), 0); // S2 classes 0..2
+				const qr = qrCode({ dsk, requestedKeys: keys, ...caps, smartStart: Boolean(request.smartStart) });
+				this.pendingDsk = dsk;
+				return { pin: dsk.slice(0, 5), dsk, qr };
 			}
 			case "fail": // the controller reports the node as failed (it can be removed without the device)
 				this.failed.add(request.node);
@@ -293,6 +354,27 @@ class Network {
 			case "reject":
 				this.rejecting.add(request.node);
 				return {};
+			case "wake": {
+				// a sleeping device wakes up (its interval elapsed, or its button): it takes queued commands, then sleeps
+				const node = this.controller.nodes.get(request.node);
+				this.silence(request.node, false);
+				const notification = new WakeUpCCWakeUpNotification({ nodeId: OWN_NODE_ID });
+				await node.sendToController(createMockZWaveRequestFrame(notification, { ackRequested: false }));
+				return {};
+			}
+			case "power_on": {
+				// a provisioned (SmartStart) device is powered on: it asks the controller to include it
+				if (!this.pendingDsk) throw new Error("no device waiting to join");
+				const nwiHomeId = nwiHomeIdFromDSK(dskFromString(this.pendingDsk));
+				const classes = { basicDeviceClass: 4, genericDeviceClass: 0x10, specificDeviceClass: 0x01 };
+				const request = new ApplicationUpdateRequestSmartStartHomeIDReceived({ remoteNodeId: 0, nwiHomeId, ...classes, supportedCCs: [] });
+				// remote node, rx status, NWI home id, CC list length, device classes (the update type is prepended)
+				const payload = [0, 0, ...nwiHomeId, 0, classes.basicDeviceClass, classes.genericDeviceClass, classes.specificDeviceClass];
+				await this.controller.sendMessageToHost(withPayload(request, payload));
+				return {};
+			}
+			case "awake":
+				return { awake: !this.silenced.has(request.node) };
 			case "revive": {
 				// the node answers again and announces itself with a report
 				this.silence(request.node, false);
@@ -346,7 +428,26 @@ class Network {
 			sensorValue = value;
 			cc = new MultilevelSensorCCReport({ ...address, type: 1, scale: 0, value });
 		} else if (kind === "scene") cc = new SceneActivationCCSet({ ...address, sceneId: value });
-		else throw new Error(`unknown report ${kind}`);
+		// what devices send as notifications (zwave-js "notification" events), `value` shaped per kind
+		else if (kind === "keypad") {
+			const { eventType, code } = value; // e.g. 2 (enter) and "1234"
+			const data = code === undefined ? { dataType: 0 } : { dataType: 2, eventData: code }; // none, or ASCII
+			cc = new EntryControlCCNotification({ ...address, sequenceNumber: ++this.sequence, eventType, ...data });
+		} else if (kind === "notification") {
+			const { type, event, parameters } = value; // e.g. 6 (access control), 5 (keypad lock), [3] (user 3)
+			const extra = parameters ? { eventParameters: Bytes.from(parameters) } : {};
+			const report = { notificationType: type, notificationEvent: event, notificationStatus: 0xff, ...extra };
+			cc = new NotificationCCReport({ ...address, ...report });
+		} else if (kind === "level_change") {
+			cc =
+				value === "stop"
+					? new MultilevelSwitchCCStopLevelChange(address)
+					: new MultilevelSwitchCCStartLevelChange({ ...address, direction: value, ignoreStartLevel: true });
+		} else if (kind === "battery_low") {
+			cc = new BatteryCCReport({ ...address, level: "low" });
+		} else if (kind === "powerlevel") {
+			cc = new PowerlevelCCTestNodeReport({ ...address, testNodeId: 1, status: value, acknowledgedFrames: 10 });
+		} else throw new Error(`unknown report ${kind}`);
 		await node.sendToController(createMockZWaveRequestFrame(cc, { ackRequested: false }));
 	}
 
