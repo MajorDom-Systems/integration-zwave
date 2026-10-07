@@ -12,71 +12,24 @@
   </picture>
 </a>
 
-<!-- ┌───────────────────────────────────────────────────────────────────────────┐
-     │ USING THIS TEMPLATE — delete everything down to the "DELETE ABOVE" line      │
-     │ once your integration repo is set up. What's left below is your own README.  │
-     └───────────────────────────────────────────────────────────────────────────┘ -->
+# integration-zwave
 
-# Creating a new MajorDom integration from this template
-
-Click **Use this template → Create a new repository** (name it `integration-<protocol>`,
-e.g. `integration-hue`), then:
-
-**1. Rename the placeholders** (find & replace across the repo)
-- `integration-template` → your distribution name, by convention `majordom-<protocol>`
-  (hyphens): in `pyproject.toml` (`[project].name`) and `.github/workflows/release.yml`
-  (`pypi-package-name`).
-- `integration_template` → your import name `majordom_<protocol>` (underscores): the
-  `integration_template/` directory, plus the `--cov=` and `packages` references in
-  `pyproject.toml`.
-- Rename `ExampleController` and fill in `integration_template/controller.py` with real
-  protocol logic. `tests/test_controller.py` is prefilled to fail until you do — work the
-  **Progress** checklist below and tick items off as your CI goes green.
-- In `.github/workflows/test.yml`, delete the `template-selfcheck` job and the `if:` guard
-  on the `test` job — they exist only to keep the *template* repo green and aren't wanted in
-  a real integration.
-- Fill in the **About this integration** section below (it doubles as your PR summary — a
-  reviewer reads the checklist to see what's actually implemented).
-
-**2. Install + pre-commit hook**
-```sh
-pip install poetry poethepoet && poe install
-```
-
-**3. Create the `develop` branch**
-```sh
-git checkout -b develop && git push origin develop
-```
-
-**4. GitHub repo settings** — same as any package repo built on the shared workflows:
-
-- **General** → enable **Allow auto-merge**;  
-- **Branches** → protect `master` (require the `test / check` status, restrict push to `github-actions[bot]`) and `develop` (require `test / check`);  
-- **Environments** → create `release` (deployment branch `develop` only, required reviewer). Then configure PyPI trusted publishing for your package (Owner = the GitHub user or org that owns **this** repo, Repository = this repo, Workflow `release.yml`, Environment `release`).  
-
-The reusable CI/CD lives in [ParkerIndustries/workflows](https://github.com/ParkerIndustries/workflows).
-
-<!-- ─────────────────────────────── DELETE ABOVE ─────────────────────────────── -->
-
-# integration-template
-
-A [MajorDom](https://majordom.io) integration — bridges the Example protocol into the
-MajorDom language.
+A [MajorDom](https://majordom.io) integration — bridges **Z-Wave** devices into the MajorDom
+language.
 
 Built for the **MajorDom Hub**, but it doesn't need it: this is a standalone, standardized
-library for the Example protocol that you can use on its own (see **Run it standalone** below).
-Built on the [MajorDom Integration SDK](https://github.com/MajorDom-Systems/integration-sdk).
-The integration's entry point is a `Controller` (`integration_template/controller.py`) that the
-Hub — or the SDK's dev runner — instantiates and drives through its lifecycle: discovery →
-pairing → commands → teardown.
+library for Z-Wave that you can use on its own (see **Run it standalone** below). Built on the
+[MajorDom Integration SDK](https://github.com/MajorDom-Systems/integration-sdk). The entry point
+is `ZwaveController` (`majordom_zwave/controller.py`), which the Hub — or the SDK's dev runner —
+instantiates and drives through its lifecycle: pairing → commands → teardown.
 
 - **Other protocols:** browse the [MajorDom integrations](https://github.com/orgs/MajorDom-Systems/repositories?q=integration-).
 - **Create your own:** start from the [integration template](https://github.com/MajorDom-Systems/integration-template).
 
 ## Documentation
 
-Full integration-author docs — the controller lifecycle, data models, storing data,
-discovery, and a worked example — live at **[docs.majordom.io](https://docs.majordom.io/device-integration)**.
+Full integration-author docs — the controller lifecycle, data models, storing data, discovery,
+and a worked example — live at **[docs.majordom.io](https://docs.majordom.io/device-integration)**.
 
 ## Development
 
@@ -90,123 +43,179 @@ poetry install && poetry run poe install
 | `poe check --ci` | Same, plus `git diff --exit-code` |
 
 Work lands on `develop`; `master` is protected and released via **Actions → Release**.
-Tests drive the controller with the SDK's test doubles (`majordom_integration_sdk.testing`)
-against a virtual/simulated device — see `tests/`.
+
+Tests drive the controller with the SDK's test doubles against a **mock Z-Wave network**: zwave-js's own
+mock controller and mock devices, with a real zwave-js driver and a real `zwave-js-server` in front
+(`tests/mock`) — the integration connects to it exactly as to a real server, no radio or stick required.
+It needs Node.js 20+:
+
+```sh
+npm ci --prefix tests/mock && poetry run pytest
+```
+
+### Command-class catalogue and canary
+
+`tests/test_catalogue.py` accounts for every command class zwave-js knows (125 today): each is hosted by a mock
+device (a recipe in `tests/mock/catalogue.mjs`: 34 of them, all their capabilities switched on), is protocol plumbing,
+or is listed in `tests/catalogue.py` with the reason the mock cannot host it. Each hosted one must map exactly as
+`EXPECTED` says — name, type, role, visibility, unit, main parameter, reviewed value by value against the docs'
+[parameter UX](https://docs.majordom.io/device-integration/parameter-ux) — pass the SDK's `parameter_audit`, and
+round-trip every writable value through the device. Seven more mock devices carry *every* variant zwave-js knows
+(88 sensor types and their scales, 14 binary sensors, 5 meters with all their scales, 22 notification types with all
+their states and events, 12 setpoints, 16 thermostat modes), checked against rules. Fast checks fail on a new command
+class, value metadata type or unit.
+
+The monthly **canary** (`.github/workflows/canary.yml`) runs all of it against the latest zwave-js, zwave-js-server
+and zwave-js-server-python: red means upstream shipped something to support, or to explain.
 
 ## Run it standalone (without the Hub)
 
-Your integration is a standalone library — import it into another app, or run **just this
+`majordom-zwave` is a standalone library — import it into your own app, or run **just this
 integration** interactively (discover, pair, control, and inspect devices from a prompt) with no Hub.
-Note here whatever prerequisites your protocol needs to run on its own (a broker, a radio, a local
-server, …).
+It needs a reachable `zwave-js-server` instance (see below).
 
 See **[Standalone mode](https://docs.majordom.io/device-integration/standalone)** for the interactive
 CLI, watch mode, and the programmatic API.
 
+## Connecting to zwave-js-server
+
+Unlike a radio-based integration, this one never talks to the Z-Wave stick directly. It connects
+over WebSocket, via [`zwave-js-server-python`](https://github.com/home-assistant-libs/zwave-js-server-python),
+to a running **[zwave-js-server](https://github.com/zwave-js/zwave-js-server)** process (Node.js) —
+the same server Home Assistant's Z-Wave JS integration uses. `zwave-js-server` is what actually owns
+the serial connection to the Z-Wave USB controller and speaks the Z-Wave protocol; this integration
+just talks JSON over a WebSocket to it.
+
+- Run `zwave-js-server` yourself (commonly via Docker) on whatever machine has the Z-Wave USB
+  controller attached.
+- Point this integration at it with the `ZWAVE_SERVER_URL` environment variable
+  (default `ws://localhost:3000`) — see `majordom_zwave/config.py`.
+- The integration keeps reconnecting (1 → 30 s backoff) while the server is unreachable; paired devices are
+  reported unavailable meanwhile, with the reason as their `last_error`.
+
 ## About this integration
 
-<!-- Fill this in. It's your PR summary — keep the checklist current so a reviewer sees at
-     a glance what works. -->
+- **Protocol / platform:** Z-Wave, via [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
+  / [`zwave-js-server-python`](https://github.com/home-assistant-libs/zwave-js-server-python).
+- **Transport(s):** Z-Wave (sub-GHz RF mesh).
+- **Supported devices:** any Z-Wave / Z-Wave Plus device exposing standard Command Classes
+  (Binary/Multilevel Switch, Indicator, etc.) that Z-Wave JS supports.
+- **Credentials needed to pair:** given when *opening the pairing window* (`start_pairing_window`), not
+  at `pair_device` time — Z-Wave needs them during inclusion, before the device exists as a discovery;
+  the discovery itself always expects `CredentialsType.none`.
+  - `code` — the S2 PIN (the first 5 digits of the DSK on the device's label), or the whole DSK.
+  - `qr` — the device's QR code (`90…`); malformed codes are rejected. An S2 code includes the device in the
+    window; a **SmartStart** code provisions it instead: zwave-js includes it securely, with no PIN, whenever it is
+    powered on (hours later, after installation), and it then arrives as a discovery. Unpairing removes it from
+    the provisioning list, or it would join again.
+  - none — the device joins, but without the S2 Authenticated / Access Control classes (they need the
+    PIN); its discovery's `last_error` says so.
+  - `secret` — not supported.
 
-- **Protocol / platform:** _e.g. Philips Hue (Zigbee via a bridge)_
-- **Transport(s):** _wifi / ble / zigbee / …_
-- **Supported devices:** _…_
-- **Credentials needed to pair:** _none / code / secret / qr_
+  The Hub does not pass credentials to `start_pairing_window` yet (the SDK's `develop` has the parameter).
 
 ### Required harness
 
-<!-- EXAMPLE — replace with your integration's real requirements (delete rows that don't
-     apply). External things this integration needs to run, beyond `pip install`, so a
-     deployment knows what to provide. -->
-
-- **Hardware adapters:** _e.g. an 802.15.4 radio (SkyConnect / a Thread or Zigbee dongle), a
-  USB serial gateway …_ — the Hub assigns OS device paths through
-  `dependencies.hardware_interfaces` (e.g. `/dev/ttyACM0`).
-- **Third-party software services:** _e.g. an OpenThread Border Router (OTBR), a vendor
-  bridge/hub, an MQTT broker, a matter-server instance …_ — what must be running and reachable.
-- **OS / permissions:** _e.g. Bluetooth access, host networking, mDNS/SSDP on the LAN …_
+- **Hardware adapters:** a Z-Wave USB controller (e.g. Aeotec/Zooz Z-Stick) — but it's attached to
+  whatever host runs `zwave-js-server`, not necessarily the Hub. This integration doesn't use
+  `dependencies.hardware_interfaces`; the radio is abstracted behind the server.
+- **Third-party software services:** [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
+  (Node.js) must be running and reachable at `ZWAVE_SERVER_URL`.
+- **OS / permissions:** network reachability (TCP) to the `zwave-js-server` host:port. No special
+  permissions needed on the Hub's own host.
 
 ### Protocol stack
 
-Every integration is two things stacked: the **MajorDom integration layer** — mapping the
-protocol to MajorDom's domain model — sitting on top of the **protocol stack** it bridges. The
-top layer is *always this repo*. How much of the stack *below* it is also this repo's code
-varies: some integrations only map an existing application-level protocol (a vendor library / the
-OS / the harness provides everything under them), while others implement the protocol themselves,
-down to raw UDP or even a custom radio.
-
-<!-- EXAMPLE — the table below is a Matter-over-Thread illustration; replace every row with your
-     own stack. Mark which layers are THIS repo's code vs. a library, the OS, or the harness —
-     it sets the scope of what the integration owns. Keep only the rows that apply. -->
-
 | Layer | Protocol | Implemented by |
 |-------|----------|----------------|
-| **MajorDom integration** | maps the protocol ↔ MajorDom domain model | **this repo, always** |
-| Application (7) | _Matter clusters / data model_ | this integration (via `chip` lib) |
-| Session (5) | _CASE / PASE secure session_ | library |
-| Transport (4) | _UDP_ | OS |
-| Network (3) | _IPv6 · 6LoWPAN_ | OS · OTBR (harness) |
-| Data link / Physical (1–2) | _Thread · IEEE 802.15.4_ | radio adapter (harness) |
+| **MajorDom integration** | maps Z-Wave devices/values ↔ MajorDom domain model | **this repo, always** |
+| Z-Wave JS Server API | `zwave-js-server`'s WebSocket/JSON-RPC protocol | library (`zwave-js-server-python`) |
+| Application | Z-Wave Command Classes (CC) | `zwave-js-server` (external Node.js service) |
+| Network / MAC / PHY | Z-Wave mesh, sub-GHz RF | Z-Wave USB controller + its driver (harness) |
 
-If your integration implements the protocol itself (no vendor library), more of the lower rows
-become **this integration** — a custom-radio integration can own everything from the application
-layer down to the physical.
+### Manual testing (real hardware)
+
+Verified against real hardware, on the version before the rework of 2026-10 (the rework is tested against
+the mock network only; to be re-run on hardware before release):
+
+- **Z-Wave controller:** Z-Stick 7 (ZWA010)
+- **Test device:** HKZW-RGB01 v1.0 (RGB bulb)
+
+### Mapping
+
+| Z-Wave | MajorDom |
+|--------|----------|
+| Device | `device_uuid("<home id>-<node id>")` (SDK helper): node ids repeat across networks and are reused after a device leaves |
+| Value | One parameter, `parameter_uuid(device, value id)`; a current/target pair (`currentValue`/`targetValue`, `currentMode`/`targetMode`, …) is **one** parameter: commanded through the target, state from the current one |
+| Multilevel Switch / Basic level, Window Covering position (0–99) | Percentage 0–100 (99 is 100) |
+| Multilevel Sensor, Meter, setpoints, Energy Production | `decimal` (scaled decimals by spec), whatever the first reading |
+| `states` | `enum` with labels in `valid_values` (`integer` when the device allows other values too, or when they only label special values: sound volume, wake-up interval) |
+| Write-only action (`"Reset"`, `"Identify"`, `"Restore previous value"`) | `none`: a button |
+| Units | Every zwave-js scale unit is mapped, converted (°F → °C, imperial → metric, Wh → kWh, mV → V, …) or deliberately `plain`; a few CCs give units only in labels (Door Lock times, wake-up interval) |
+| Central Scene, Scene Activation, `stateful: false` | `event` role (sent by zwave-js as "value notification"); their settings stay controls |
+| Notifications (zwave-js "notification" events) | Read-only `event` parameters: **Keypad** (the event type: Enter, Away, …) and **Keypad code** (what was typed, `system`); one **`<type>` event** per Notification CC type with events (Access control, Home security, …) and its **details** (user id…, JSON, `system`); a remote's **Level change**; **Battery replacement**; **Powerlevel test**. Enum labels are what the device announced; events it did not are dropped |
+| Visibility | "When in doubt, hide it": a curated list of everyday controls and live readings is `user` (switches, levels, colour, sensors, meters, locks, thermostats, covers, garage doors, battery, …); every other value of a reviewed CC is a `setting`; wiring, metadata, secrets, durations and opaque data are `system`, and so is every value of a CC nobody reviewed (still usable by automations and the API) |
+| Names | Written for people, not zwave-js's labels: `Power`, `Level`, `Color`, `Lock`, `Electric energy` (not `Electric Consumption [kWh]`), `Motion` (not `Sensor state (Motion)`), `Heating setpoint`, `Scene 1`; a name several values share gets what tells them apart (`Sensor status (Water alarm)`); camelCase enum labels become words (`Unsecured with timeout`) |
+| Unsupervised set (delivered, not confirmed) | Read back from the device ~6 s later unless zwave-js already did: the Hub sees what the device did |
+| Main parameter | Binary Switch (toggle) › Multilevel Switch (off / 100 %) › Barrier (closed / open) › Door Lock (unsecured / secured) › Lock (toggle) › Window Covering (closed / open) › Basic, when it is the only control (off / 100 %) |
 
 ### Progress
 
-Two checklists — this README is where you track them (tick items as you implement them and the
-matching test in `tests/` goes green). The docs explain the *why* behind each item:
-[Implementation Checklist](https://docs.majordom.io/device-integration) (gets it working) and
-[Quality Checklist](https://docs.majordom.io/device-integration/quality) (gets it releasable).
-
 **Implementation** — makes the integration functional:
 
-- [ ] Discovery services registered via `self.dependencies.zeroconf_discovery_service`, `ssdp_discovery_service`, and/or `ble_discovery_service` as appropriate; cancel closures saved and called in `stop`
-- [ ] Discovery service listeners fire when devices are found, and the controller calls `self.dependencies.output.controller_did_receive_discovery`
-- [ ] Discovery of devices already paired to the Hub on reconnect, e.g. after a reboot (`self.dependencies.output.controller_did_connect_device` is called)
-- [ ] `start_pairing_window` is implemented but only if the protocol requires an explicit scan (like zigbee)
-- [ ] Device pairing 
-- [ ] Device schema is properly mapped: device info, parameter list, and each parameter's metadata are translated to MajorDom's domain model
-- [ ] Hub → Device control (`send_command` is implemented)
-- [ ] Device → Hub event subscription (`self.dependencies.output.controller_did_receive_events` is called on incoming events)
-- [ ] `identify` is implemented
-- [ ] `unpair` is implemented
-- [ ] `fetch` is implemented
-- [ ] Paired devices going offline/coming back online *while the Hub is running* (not just on reboot) — set `device.available` accordingly (report `controller_did_lose_device`), and clear/set `last_error` to match
-- [ ] Graceful shutdown in `stop`, cancelling any running tasks, discovery stopped, all connections closed
-- [ ] Tests pass against a virtual/simulated device (`tests/test_controller.py`)
-- [ ] README fully filled in: delete the template-setup section above, complete **About this integration**, **Required harness**, **Protocol stack**, and **Notes** with real content
+- [x] Discovery of joining devices (`"node added"`), and of nodes already on the network but not paired
+- [x] Discovery of already-paired devices on (re)connect — matched by home id and node id, and checked against
+      the device's fingerprint (a node id reused by another device is not taken for the paired one)
+- [x] `start_pairing_window` (default, S2 PIN or DSK, S2 QR, SmartStart)
+- [x] Device pairing (completes the device the Hub created; fails cleanly and stays discovered when the device
+      does not finish its interview)
+- [x] Device schema mapped (see **Mapping**)
+- [x] Hub → Device control (`send_command`); the state comes back as the device's report, never echoed
+- [x] Device → Hub events (`"value updated"`, `"value notification"`, `"notification"`: keypads, Notification CC
+      events, remote dimming, low battery, radio tests)
+- [x] `identify` — Indicator CC v3 identify; a light blinks; any other device is left alone (a relay or a motor
+      may drive a heater, a pump or a blind)
+- [x] `unpair` — a failed node is removed without the device; a live one when *this* device confirms the exclusion
+- [x] `fetch`
+- [x] Availability — `"dead"`/`"alive"`, the server connection, a device removed with another tool
+- [x] Graceful shutdown in `stop`
+- [x] Tests pass against a simulated network (mock zwave-js controller and devices)
 
 **Quality** — makes it reliable and maintainable (the bar for release):
 
-- [ ] **Recovers automatically** from connection loss / offline device / restarted backend — retried with backoff, no manual restart
-- [ ] **No exception escapes the controller** — every background task, subscription loop, and callback catches its own errors; nothing raised into `self.dependencies.output.*`
-- [ ] **Failures are surfaced, not raised** — logged once (no spam) and reflected on the device (`available` / `last_error`), cleared on recovery
-- [ ] **Re-authenticates automatically** when credentials expire/are rejected (if the protocol uses credentials)
-- [ ] **Fully asynchronous** — no blocking I/O on the event loop; heavy/blocking work runs off-loop
-- [ ] **Stable identity** — device and parameter UUIDs derived through the SDK helpers, identical across restarts/re-pairs
-- [ ] **End-to-end tests** drive pair → command → fetch → events → `unpair` against a virtual device (`majordom_integration_sdk.testing`)
-- [ ] **Failure paths tested** — offline device, transport error, rejected credentials degrade gracefully (no raise)
-- [ ] **Broad device coverage** where the protocol has many device/parameter types (a virtual-device catalogue in CI is ideal)
-- [ ] **Fully typed** (`ty`, no package-wide ignores) and **clean** (`poe check`) with no warnings
-- [ ] **Readable & structured** — conversion logic in a mapper, models separated, comments where intent isn't obvious
-- [ ] **Efficient** — subscriptions over polling; batch/chunk reads; no redundant work
-- [ ] **Diagnosable** — logging at the right levels to debug a device problem from logs alone
-- [ ] **Rich parameter metadata** — correct `visibility` per parameter and a sensible `main_parameter`, so the app presents a clean control-center action and a tidy parameter list ([Parameter UX](https://docs.majordom.io/device-integration/parameter-ux))
-- [ ] **Owned** — a listed maintainer who keeps it working as the protocol/library evolve
-- [ ] _nice-to-have:_ localizable naming · firmware/software updates (where supported) · user-facing supported-device docs
+- [x] **Recovers automatically** from a lost or restarted `zwave-js-server` (reconnects with backoff)
+- [x] **No exception escapes background work** — event handlers run as logged tasks; Hub calls raise after
+      recording the reason
+- [x] **Failures are surfaced, not swallowed** — the reason is the device's or discovery's `last_error`; an
+      unreachable server at start is reported through `controller_did_encounter_error`
+- [x] **Re-authenticates automatically** — not applicable (Z-Wave has no expiring credential)
+- [x] **Fully asynchronous**
+- [x] **Stable identity** — the SDK helpers, scoped by the network's home id
+- [x] **End-to-end tests** drive pair → command → fetch → events → `unpair` against the mock network
+- [x] **Failure paths tested** — unreachable or lost server, unresponsive and refusing devices, interview timeout,
+      exclusion timeout, the wrong device excluded, a reused node id, a missing PIN
+- [x] **Broad device coverage** — the catalogue hosts 33 command classes (switches, dimmers, lights, sensors, meters,
+      locks, thermostats, covers, garage doors, scene controllers, sirens, user codes, child locks, humidifiers,
+      keypads, smoke/CO alarms, sleeping devices, …); S2 by PIN, DSK, QR and SmartStart. The others are plumbing or
+      explained (see **Command-class catalogue and canary**)
+- [x] **Fully typed** (`ty`) and **clean** (`poe check`)
+- [x] **Readable & structured** — mapping in `mapper.py`, static tables in `zwave_spec.py`
+- [x] **Efficient** — subscription-based, not polling
+- [x] **Diagnosable** — per-area log tags (`[PAIR]`, `[CONNECT]`, …), reasons in `last_error`, causes chained
+- [x] **Rich parameter metadata** — role, visibility, units, limits, enum labels, main parameter; names and buckets
+      reviewed against the docs' parameter UX for every hosted CC, and audited (`parameter_audit`)
+- [ ] **Owned** — add a listed maintainer
+- [ ] _nice-to-have:_ localizable naming · firmware updates · user-facing supported-device docs
 
 ### Notes
 
-<!-- EXAMPLE / optional — free text. Anything a reader should know that the checklist can't
-     capture. Delete this comment and write your own, or remove the section if unused. -->
-
-_e.g. "Hobby project, maintained best-effort." · "IP transport works; BLE pairing is not
-implemented yet." · "Help wanted: reliable re-pair after a bridge reboot." · known quirks,
-firmware versions tested against, limitations._
+- Z-Wave discovery doesn't use `zeroconf`/`ssdp`/`ble`: nodes are surfaced from `zwave-js-server`'s own events.
+- Command classes zwave-js's mock cannot host (rare ones: tariffs, IP gateways, AV, schedules, irrigation) are not
+  reviewed: their values map by the generic rules and are hidden (`system`), still usable by automations and the API.
+- What zwave-js's mock cannot do, so the catalogue does not round-trip it: decode a Color Switch Set, keep an
+  Indicator's state; its Thermostat Setpoint Set refuses every value above the minimum, so the harness replaces it.
 
 ## License
 
-See [LICENSE](LICENSE). Your integration code is yours to license as you choose. For
-commercial licensing or partnership inquiries regarding MajorDom, contact us via
-[parker-industries.org/partnership](https://parker-industries.org/partnership).
+See [LICENSE](LICENSE). For commercial licensing or partnership inquiries regarding MajorDom,
+contact us via [parker-industries.org/partnership](https://parker-industries.org/partnership).

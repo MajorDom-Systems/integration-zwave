@@ -1,0 +1,23 @@
+services:
+  zwave-js-ui:
+    container_name: zwave-js-ui
+    image: zwavejs/zwave-js-ui:latest
+    restart: unless-stopped
+    tty: true
+    stop_signal: SIGINT
+    environment:
+      - SESSION_SECRET=change_me_to_a_secure_string
+      - TZ=America/New_York
+      - KEY_S0_Legacy=${ZWAVE_KEY_S0_LEGACY}
+      - KEY_S2_Unauthenticated=${ZWAVE_KEY_S2_UNAUTHENTICATED}
+      - KEY_S2_Authenticated=${ZWAVE_KEY_S2_AUTHENTICATED}
+      - KEY_S2_AccessControl=${ZWAVE_KEY_S2_ACCESSCONTROL}
+      - KEY_LR_S2_Authenticated=${ZWAVE_KEY_LR_S2_AUTHENTICATED}
+      - KEY_LR_S2_AccessControl=${ZWAVE_KEY_LR_S2_ACCESSCONTROL}
+    devices:
+      - /dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_f81b68219079ed11b995d30ffef7b791-if00-port0:/dev/zwave
+    volumes:
+      - ./zwave-store:/usr/src/app/store
+    ports:
+      - 8091:8091
+      - 3000:3000

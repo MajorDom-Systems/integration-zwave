@@ -1,19 +1,12 @@
-# Rename `integration-template` (PyPI/distribution name, hyphens) and the
-# `integration_template/` package directory (import name, underscores) to your own — by
-# convention `majordom-<protocol>` / `majordom_<protocol>` (e.g. majordom-homekit /
-# majordom_homekit). Keep them matching so poetry-core auto-detects the package, and update
-# `pypi-package-name` in the release stub + `--cov=` below to match.
 [project]
-name = "integration-template"
+name = "majordom-zwave"
 version = "0.1.0"
-description = "A MajorDom integration."
+description = "Z-Wave integration for MajorDom — bridges Z-Wave devices into the MajorDom language."
 authors = [{ name = "Mark Parker", email = "mark@parker-programs.com" }]
 readme = "README.md"
-# The template scaffold is Apache-2.0. Relicense your integration as you see fit — note
-# that linking a copyleft (GPL/AGPL) protocol library may constrain your choice.
-license = "Apache-2.0"
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
-keywords = ["majordom", "smart-home", "home-automation", "iot", "integration", "template", "scaffold"]
+keywords = ["majordom", "zwave", "z-wave", "zwave-js", "zwave-js-server-python", "smart-home", "home-automation", "iot", "integration"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -22,13 +15,14 @@ classifiers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "majordom-integration-sdk (>=0.1.5,<1.0)",
+    "majordom-integration-sdk (>=0.1.7,<1.0)",
+    "zwave-js-server-python (>=0.74.0,<0.75.0)",
 ]
 
 [project.urls]
 Homepage = "https://majordom.io"
 Documentation = "https://docs.majordom.io/device-integration"
-Repository = "https://github.com/MajorDom-Systems/integration-template"
+Repository = "https://github.com/MajorDom-Systems/integration-zwave"
 
 [dependency-groups]
 dev = [
@@ -56,7 +50,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 requires-poetry = ">=2.0"
-packages = [{ include = "integration_template" }]
+packages = [{ include = "majordom_zwave" }]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -113,7 +107,7 @@ echo "\nRunning ty:"
 poetry run ty check || code=1
 
 echo "\nRunning pytest:"
-poetry run pytest --cov=integration_template --cov-report=xml || code=1
+poetry run pytest --cov=majordom_zwave --cov-report=xml || code=1
 
 echo "\nRunning poetry build:"
 poetry build || code=1
