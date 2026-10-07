@@ -8,18 +8,11 @@ from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.testing import RecordingControllerOutput
 from zwave_js_server.client import Client
 
-from majordom_zwave import ZwaveController, config
+from majordom_zwave import ZwaveController
 from tests.helpers import command, pair, param, stored, wait_for_value, wait_until
 from tests.network import MockNetwork
 
 SWITCH = "37-0-targetValue"
-
-
-def test_the_server_url_comes_from_the_documented_variable(monkeypatch):
-    monkeypatch.setenv("ZWAVE_SERVER_URL", "ws://zwave.local:3000")
-    assert config.server_url() == "ws://zwave.local:3000"
-    monkeypatch.delenv("ZWAVE_SERVER_URL")
-    assert config.server_url() == "ws://localhost:3000"
 
 
 async def restart(controller: ZwaveController, deps: AbstractController.Dependencies) -> ZwaveController:

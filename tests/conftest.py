@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
 
 import pytest
+from majordom_integration_sdk import Endpoint
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_dependencies
 
@@ -15,7 +16,8 @@ INTEGRATION = "ZWave"
 
 @pytest.fixture
 def deps() -> AbstractController.Dependencies:
-    return build_test_dependencies(integration=INTEGRATION)
+    # A mutable links dict, so a network started later can point the controller at itself.
+    return build_test_dependencies(integration=INTEGRATION).copy(links={})
 
 
 @pytest.fixture
@@ -47,7 +49,7 @@ async def controller(deps: AbstractController.Dependencies, fast: None) -> Async
 
 
 @pytest.fixture
-async def make_network(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Callable[..., Awaitable[MockNetwork]]]:
+async def make_network(deps: AbstractController.Dependencies) -> AsyncIterator[Callable[..., Awaitable[MockNetwork]]]:
     """Start a mock network (with the given nodes already included) and point the integration at it."""
     networks: list[MockNetwork] = []
 
@@ -55,7 +57,7 @@ async def make_network(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Callabl
         network = MockNetwork(nodes or [])
         networks.append(network)
         await network.start(serve=serve)
-        monkeypatch.setenv("ZWAVE_SERVER_URL", network.url)
+        cast(dict, deps.links)["zwave"] = Endpoint("zwave", "ws", network.url)
         return network
 
     yield make

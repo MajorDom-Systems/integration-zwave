@@ -6,6 +6,7 @@ from typing import Any, ClassVar, override
 from uuid import UUID
 
 from aiohttp import ClientSession
+from majordom_integration_sdk import Need
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
@@ -38,6 +39,9 @@ AUTHENTICATED = {SecurityClass.S2_AUTHENTICATED, SecurityClass.S2_ACCESS_CONTROL
 
 class ZwaveController(AbstractController):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
+
+    needs = [Need("zwave", ["ws"])]
+    services = [config.ZWAVE_JS]
 
     name: ClassVar[str] = "ZWave"
 
@@ -99,7 +103,7 @@ class ZwaveController(AbstractController):
         """Connects to zwave-js-server and keeps reconnecting; an unreachable server is reported, not raised."""
         self._session = ClientSession()
         self._first_attempt.clear()
-        self._supervisor = asyncio.create_task(self._run(config.server_url(), self._session))
+        self._supervisor = asyncio.create_task(self._run(self.dependencies.links["zwave"].url, self._session))
         await self._first_attempt.wait()
 
     async def stop(self):

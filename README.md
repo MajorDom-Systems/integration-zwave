@@ -86,10 +86,11 @@ the same server Home Assistant's Z-Wave JS integration uses. `zwave-js-server` i
 the serial connection to the Z-Wave USB controller and speaks the Z-Wave protocol; this integration
 just talks JSON over a WebSocket to it.
 
-- Run `zwave-js-server` yourself (commonly via Docker) on whatever machine has the Z-Wave USB
-  controller attached.
-- Point this integration at it with the `ZWAVE_SERVER_URL` environment variable
-  (default `ws://localhost:3000`) — see `majordom_zwave/config.py`.
+- The hub runs it for you: `majordom_zwave/config.py` declares the server as a service that needs
+  a Z-Wave stick, with the network keys as settings (generated once — back them up) and the RF
+  region taken from the hub.
+- Standalone, run `zwave-js-server` yourself and pass its URL as
+  `links={"zwave": Endpoint("zwave", "ws", "ws://localhost:3000")}`.
 - The integration keeps reconnecting (1 → 30 s backoff) while the server is unreachable; paired devices are
   reported unavailable meanwhile, with the reason as their `last_error`.
 
@@ -117,10 +118,10 @@ just talks JSON over a WebSocket to it.
 ### Required harness
 
 - **Hardware adapters:** a Z-Wave USB controller (e.g. Aeotec/Zooz Z-Stick) — but it's attached to
-  whatever host runs `zwave-js-server`, not necessarily the Hub. This integration doesn't use
-  `dependencies.hardware_interfaces`; the radio is abstracted behind the server.
+  whatever host runs `zwave-js-server`, not necessarily the Hub. The radio is abstracted behind the
+  server; this integration only gets the server's `zwave` link.
 - **Third-party software services:** [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
-  (Node.js) must be running and reachable at `ZWAVE_SERVER_URL`.
+  (Node.js), run by the hub or reachable at the `zwave` link you pass.
 - **OS / permissions:** network reachability (TCP) to the `zwave-js-server` host:port. No special
   permissions needed on the Hub's own host.
 
