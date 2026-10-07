@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 
 PIN = re.compile(r"\d{5}")  # the S2 PIN: the first 5 digits of the DSK, printed on the device
 DSK = re.compile(r"\d{5}(-\d{5}){7}")  # the full DSK
+SMART_START_QR = re.compile(r"9001\d+")  # a QR code's version digits: 00 is S2, 01 is SmartStart
 APPLIED = {SetValueStatus.SUCCESS, SetValueStatus.SUCCESS_UNSUPERVISED, SetValueStatus.WORKING}
 # Security classes that need the device's PIN; granted only when the PIN (or DSK) was given
 AUTHENTICATED = {SecurityClass.S2_AUTHENTICATED, SecurityClass.S2_ACCESS_CONTROL}
@@ -45,6 +46,9 @@ class ZwaveController(AbstractController):
     EXCLUSION_TIMEOUT: ClassVar[float] = 60  # for the user to put the device into exclusion mode
     IDENTIFY_BLINKS: ClassVar[int] = 5
     IDENTIFY_PERIOD: ClassVar[float] = 0.6
+    # After an unsupervised set (delivered, not confirmed), zwave-js re-reads some values ~5 s later; past this delay
+    # the value is read back here when it has not changed, so the Hub learns what the device actually did
+    VERIFY_DELAY: ClassVar[float] = 6
 
     def __init__(self, dependencies: AbstractController.Dependencies):
         super().__init__(dependencies)
@@ -57,6 +61,7 @@ class ZwaveController(AbstractController):
         self._joined: dict[UUID, Node] = {}  # nodes behind the discoveries
         self._nodes: dict[UUID, Node] = {}  # nodes of paired devices
         self._routes: dict[UUID, dict[str, str | None]] = {}  # value id → value id of the parameter it reports
+        self._events: dict[UUID, dict[str, Any]] = {}  # event parameters' value ids → their enum labels (or None)
         self._unsubscribe: dict[UUID, list[Callable[[], None]]] = {}  # per paired device
         self._listeners: list[Callable[[], None]] = []  # on the driver's controller, gone with the connection
         self._available: dict[UUID, bool] = {}
@@ -184,7 +189,12 @@ class ZwaveController(AbstractController):
                     device.id, False, f"Node {data.node_id} is now another device ({found}): pair that one anew"
                 )
             else:
-                self._bind(device.id, node)
+                events = {
+                    p.integration_data.value_id: p.valid_values
+                    for p in device.parameters
+                    if p.integration_data.value_id not in node.values  # an event parameter (of a notification)
+                }
+                self._bind(device.id, node, events)
                 await self._update_availability(device.id, node)
                 if node.status != NodeStatus.DEAD:
                     await self._report_snapshot(device.id, node)
@@ -214,6 +224,12 @@ class ZwaveController(AbstractController):
             raise ValueError("Z-Wave devices are paired with their PIN, DSK or QR code, not a secret")
         if kind == CredentialsType.code and not DSK.fullmatch(value) and not PIN.fullmatch(value):
             raise ValueError("The PIN is the first 5 digits of the device's DSK (or give the whole DSK)")
+        if kind == CredentialsType.qr and SMART_START_QR.fullmatch(value):
+            # SmartStart: no window to open. zwave-js keeps the device on its provisioning list and includes it,
+            # securely, whenever it is powered on — hours later, after installation; it then joins as a discovery
+            await controller.async_provision_smart_start_node(value)
+            log.debug("[PAIRING] SmartStart device provisioned: it joins when powered on")
+            return
         self._credentials = credentials  # before inclusion starts: a device can ask for its grant right away
         try:
             if kind == CredentialsType.qr:
@@ -247,7 +263,8 @@ class ZwaveController(AbstractController):
             if hub_device is None:
                 raise LookupError("The Hub has not created a device for this discovery")
 
-            parameters = self._build_parameters(discovery.id, node)
+            events = mapper.event_parameters(node, await self._supported_notification_events(node))
+            parameters = self._build_parameters(discovery.id, node, events)
             main = mapper.main_value(node)
             main_id = self._parameter_id(discovery.id, main[0].value_id) if main else None
             for parameter in parameters:
@@ -256,7 +273,9 @@ class ZwaveController(AbstractController):
             device = hub_device.model_copy(
                 update={
                     "parameters": parameters,
-                    "main_parameter": main_id if any(p.id == main_id for p in parameters) else None,
+                    "main_parameter": main_id
+                    if any(p.id == main_id and p.can_be_main_parameter for p in parameters)
+                    else None,
                     "available": True,
                     "last_error": None,
                     "integration_data": ZwaveDeviceIntegrationData(
@@ -285,7 +304,7 @@ class ZwaveController(AbstractController):
 
         self._discoveries.pop(discovery.id, None)
         self._joined.pop(discovery.id, None)
-        self._bind(discovery.id, node)
+        self._bind(discovery.id, node, {event.value_id: event.valid_values for event in events})
         await self._set_available(discovery.id, True)
         await self._report_snapshot(discovery.id, node)
         return discovery.id
@@ -296,6 +315,8 @@ class ZwaveController(AbstractController):
         if node is None:  # not on the network anymore: nothing to remove
             self._unbind(device.id)
             return
+        # A SmartStart device stays provisioned unless removed from the list: it would join again when powered on
+        provisioning = await controller.async_get_provisioning_entry(node.node_id)
         if await controller.async_is_failed_node(node):
             await controller.async_remove_failed_node(node)
         else:
@@ -319,6 +340,8 @@ class ZwaveController(AbstractController):
                 reason = f"another device (node {removed}) was excluded instead: it left the network"
                 await self._update_device(device.id, last_error=f"Not removed: {reason}")
                 raise LookupError(reason)
+        if provisioning is not None:
+            await controller.async_unprovision_smart_start_node(provisioning.dsk)
         self._unbind(device.id)
         self._available.pop(device.id, None)
 
@@ -389,6 +412,15 @@ class ZwaveController(AbstractController):
             raise RuntimeError(reason)
         # no echo: the device's report (or zwave-js's verification of it) comes back as "value updated"
         await self._update_device(device.id, last_error=None)
+        if awake and result is not None and result.status == SetValueStatus.SUCCESS_UNSUPERVISED:
+            state = node.values.get(parameter.integration_data.state_value_id or value.value_id, value)
+            self._spawn(self._verify(node, state, mapper.to_device(value, command.value)))
+
+    async def _verify(self, node: Node, state: Value, sent: Any) -> None:
+        """Reads a value back after an unconfirmed set, unless zwave-js already did (its value then is the sent one)."""
+        await asyncio.sleep(self.VERIFY_DELAY)
+        if state.metadata.readable and state.value != sent and node.status != NodeStatus.DEAD:
+            await node.async_poll_value(state)
 
     # =========================================================================
     # Private helpers
@@ -492,15 +524,30 @@ class ZwaveController(AbstractController):
         finally:
             unsubscribe()
 
-    def _build_parameters(self, device_id: UUID, node: Node) -> list[ZwaveParameter]:
+    async def _supported_notification_events(self, node: Node) -> list[dict[str, Any]]:
+        """The keypad and Notification CC events the node supports, as zwave-js knows them from its interview."""
+        assert self._zwave_client is not None
+        try:
+            result = await self._zwave_client.async_send_command(
+                {"command": "node.get_supported_notification_events", "nodeId": node.node_id}, require_schema=43
+            )
+        except Exception:  # noqa: BLE001  an older server: no keypad or Notification CC event parameters
+            log.warning("[PAIR] node_id=%s: supported notification events unknown", node.node_id, exc_info=True)
+            return []
+        return result.get("events", [])
+
+    def _build_parameters(
+        self, device_id: UUID, node: Node, events: list[mapper.EventParameter]
+    ) -> list[ZwaveParameter]:
         """The device's parameters; their values reach the Hub as events (the snapshot after pairing)."""
         parameters: list[ZwaveParameter] = []
-        for value, state in mapper.parameter_values(node):
+        pairs = mapper.parameter_values(node)
+        for (value, state), name in zip(pairs, mapper.names(pairs), strict=True):
             low, high, step = mapper.limits(value)
             parameters.append(
                 ZwaveParameter(
                     id=self._parameter_id(device_id, value.value_id),
-                    name=mapper.name(value, state),
+                    name=name,
                     data_type=mapper.data_type(value),
                     role=mapper.role(value),
                     visibility=mapper.visibility(value, node),
@@ -514,6 +561,19 @@ class ZwaveController(AbstractController):
                     ),
                 )
             )
+        parameters += [
+            ZwaveParameter(
+                id=self._parameter_id(device_id, event.value_id),
+                name=event.name,
+                data_type=event.data_type,
+                role=ParameterRole.event,
+                visibility=event.visibility,
+                unit=event.unit,
+                valid_values=event.valid_values,
+                integration_data=ZwaveParameterIntegrationData(value_id=event.value_id),
+            )
+            for event in events
+        ]
         return parameters
 
     async def _grant(self, requested: InclusionGrant) -> None:
@@ -556,11 +616,13 @@ class ZwaveController(AbstractController):
                 self._unbind(device_id)
                 await self._set_available(device_id, False, "The device was removed from the Z-Wave network")
 
-    def _bind(self, device_id: UUID, node: Node) -> None:
+    def _bind(self, device_id: UUID, node: Node, events: dict[str, Any]) -> None:
         self._unbind(device_id)
         self._nodes[device_id] = node
         self._routes[device_id] = mapper.reported_parameters(node)
+        self._events[device_id] = events
         self._unsubscribe[device_id] = [
+            node.on("notification", lambda data: self._spawn(self._notified(device_id, data["notification"]))),
             node.on("value updated", lambda data: self._spawn(self._value_updated(device_id, data["value"]))),
             node.on(
                 "value notification",
@@ -573,6 +635,7 @@ class ZwaveController(AbstractController):
     def _unbind(self, device_id: UUID) -> None:
         self._nodes.pop(device_id, None)
         self._routes.pop(device_id, None)
+        self._events.pop(device_id, None)
         for unsubscribe in self._unsubscribe.pop(device_id, []):
             unsubscribe()
 
@@ -605,6 +668,18 @@ class ZwaveController(AbstractController):
             value=mapper.to_hub(value, value.value),
         )
         await self.dependencies.output.controller_did_receive_events(self, [event])
+
+    async def _notified(self, device_id: UUID, notification: Any) -> None:
+        known = self._events.get(device_id, {})
+        changes = []
+        for value_id, value in mapper.notification_events(notification):
+            if value_id not in known or (known[value_id] and value not in known[value_id]):
+                log.debug("[EVENT] %s=%r: not an event the device announced", value_id, value)
+                continue
+            parameter_id = self._parameter_id(device_id, value_id)
+            changes.append(DeviceParameterChange(device_id=device_id, parameter_id=parameter_id, value=value))
+        if changes:
+            await self.dependencies.output.controller_did_receive_events(self, changes)
 
     async def _report_snapshot(self, device_id: UUID, node: Node) -> None:
         events = [
