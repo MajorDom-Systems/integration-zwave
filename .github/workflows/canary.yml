@@ -38,7 +38,7 @@ jobs:
           npm ci --prefix tests/mock --no-audit --no-fund
           npm install --prefix tests/mock --no-save --no-audit --no-fund zwave-js@latest @zwave-js/server@latest
           poetry run pip install --upgrade zwave-js-server-python
-          npm ls --prefix tests/mock zwave-js @zwave-js/server
+          npm ls --prefix tests/mock zwave-js @zwave-js/server || true  # "invalid": newer than package.json pins, on purpose
           poetry run pip show zwave-js-server-python | head -2
 
       - name: Whole suite, catalogue included
