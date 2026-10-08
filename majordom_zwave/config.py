@@ -28,7 +28,8 @@ ZWAVE_JS = Service(
     provides=[Endpoint("zwave", "ws", "ws://127.0.0.1:3000")],
     settings=ZwaveNetwork,
     compose={
-        "image": "ghcr.io/kpine/zwave-js-server:latest",
+        # :latest pinned by digest (2026-10-08); bump on purpose
+        "image": "ghcr.io/kpine/zwave-js-server@sha256:19592f8e979525ac6f4e6cac22b28324edfaa757c9d2da3d6fec9c4b2ddd18a8",  # noqa: E501
         "network_mode": "host",
         "devices": ["{links.zwave.url}:/dev/zwave"],
         "volumes": ["{data}:/cache"],
