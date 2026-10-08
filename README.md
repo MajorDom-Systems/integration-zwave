@@ -115,15 +115,20 @@ just talks JSON over a WebSocket to it.
 
   The Hub does not pass credentials to `start_pairing_window` yet (the SDK's `develop` has the parameter).
 
-### Required harness
+### Needs
 
-- **Hardware adapters:** a Z-Wave USB controller (e.g. Aeotec/Zooz Z-Stick) — but it's attached to
-  whatever host runs `zwave-js-server`, not necessarily the Hub. The radio is abstracted behind the
-  server; this integration only gets the server's `zwave` link.
-- **Third-party software services:** [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
-  (Node.js), run by the hub or reachable at the `zwave` link you pass.
-- **OS / permissions:** network reachability (TCP) to the `zwave-js-server` host:port. No special
-  permissions needed on the Hub's own host.
+| Capability | Required | Provided by |
+|------------|----------|-------------|
+| `zwave/ws` | yes | the `zwave-js` service below; standalone, any `zwave-js-server` you run |
+| `zwave/serial` (for `zwave-js`) | yes | a Z-Wave USB controller (e.g. Aeotec/Zooz Z-Stick), recognised by the hub through the Serial API |
+
+- **Services it brings:** `zwave-js`, a [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
+  container (`majordom_zwave/config.py`), which the hub runs while a Z-Wave stick is plugged in.
+- **Settings:** the network's security keys (`ZwaveNetwork`, settings of the `zwave-js` service),
+  generated once. Back them up: without them, securely included devices have to be re-included.
+- **Context:** the RF region (`context.region`, from the hub's region setting).
+- **OS / permissions:** network reachability (TCP) to `zwave-js-server` when you run it on another
+  host yourself.
 
 ### Protocol stack
 
