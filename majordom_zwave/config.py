@@ -31,6 +31,7 @@ ZWAVE_JS = Service(
         # :latest pinned by digest (2026-10-08); bump on purpose
         "image": "ghcr.io/kpine/zwave-js-server@sha256:19592f8e979525ac6f4e6cac22b28324edfaa757c9d2da3d6fec9c4b2ddd18a8",  # noqa: E501
         "network_mode": "host",
+        "userns_mode": "host",  # a remapped user can't open the stick on hosts with userns-remap
         "devices": ["{links.zwave.url}:/dev/zwave"],
         "volumes": ["{data}:/cache"],
         "environment": {
