@@ -187,3 +187,13 @@ async def test_a_paired_device_can_be_found_again_after_its_discovery(
 
     assert (await stored(controller, device.id)).id == device.id
     assert not output.lost_devices
+
+
+async def test_a_device_that_missed_its_identity_is_interviewed_again(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    await controller.start()
+    device = await pair(controller, output, network, missIdentity=True)  # busy right after joining
+
+    assert device.integration_data is not None
+    assert device.integration_data.fingerprint  # known: its device file applies, and a reused node id is told apart

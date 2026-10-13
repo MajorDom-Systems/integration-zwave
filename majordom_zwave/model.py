@@ -7,6 +7,7 @@ class ZwaveDeviceIntegrationData(BaseModel):
     node_id: int
     # manufacturer:product type:product id: tells a node id reused by another device from the paired one
     fingerprint: str | None = None
+    dsk: str | None = None  # an S2 device's key: its SmartStart entry outlives the node when it leaves by itself
 
 
 class ZwaveParameterIntegrationData(BaseModel):

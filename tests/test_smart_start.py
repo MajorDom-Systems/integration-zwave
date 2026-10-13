@@ -90,3 +90,21 @@ async def test_an_s2_qr_code_is_not_provisioned(controller: ZwaveController, net
     await controller.start_pairing_window(60, ProvidedCredentials(type=CredentialsType.qr, value=label["qr"]))
 
     assert label["dsk"] not in await provisioned(network)
+
+
+async def test_unpairing_a_smart_start_device_that_reset_itself_removes_its_provisioning(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    await controller.start()
+    label = await provision(controller, network)
+    await network.power_on(5)
+    await wait_until(lambda: output.received_discoveries, 20, "the device to join")
+    discovery = output.received_discoveries[-1]
+    await hub_creates_device(controller.dependencies, discovery)
+    device = await stored(controller, await controller.pair_device(discovery, None))
+
+    await network.reset(5)  # it left by itself: no node is left to remove
+    await wait_until(lambda: device.id in output.lost_devices, 10, "the device to leave")
+    await controller.unpair(await stored(controller, device.id))
+
+    assert label["dsk"] not in await provisioned(network)  # or it would join again at its next power-up

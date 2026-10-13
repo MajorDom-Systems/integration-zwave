@@ -108,6 +108,10 @@ class MockNetwork:
     async def exclude(self, node: int) -> None:
         await self.call("exclude", node=node)
 
+    async def reset(self, node: int) -> None:
+        """The device is factory reset: it tells the controller it left, and goes silent."""
+        await self.call("reset", node=node)
+
     async def node_ids(self) -> list[int]:
         return (await self.call("nodes"))["nodes"]
 

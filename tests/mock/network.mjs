@@ -10,6 +10,7 @@ import { ZwavejsServer } from "@zwave-js/server";
 import {
 	BatteryCCReport,
 	BinarySwitchCCReport,
+	DeviceResetLocallyCCNotification,
 	EntryControlCCNotification,
 	MultilevelSensorCCReport,
 	MultilevelSwitchCCStartLevelChange,
@@ -17,6 +18,7 @@ import {
 	NotificationCCReport,
 	PowerlevelCCTestNodeReport,
 	SceneActivationCCSet,
+	Security2CC,
 	WakeUpCCWakeUpNotification,
 } from "@zwave-js/cc";
 import { CommandClasses, SecurityClass, dskFromString, dskToString, nwiHomeIdFromDSK } from "@zwave-js/core";
@@ -140,6 +142,7 @@ class Network {
 	failed = new Set(); // node ids the controller reports as failed
 	silenced = new Set(); // node ids that stop responding (no ACK, no reply)
 	rejecting = new Set(); // node ids that refuse commands
+	unidentified = new Set(); // node ids that miss the first Manufacturer Specific query (busy right after S2 bootstrapping)
 	removeCallbackId = undefined; // of the running exclusion, to complete it on request
 	adding = false; // an inclusion is running (see the AddNodeToNetworkRequest behaviors)
 	pendingDsk = undefined; // of the device waiting to join
@@ -262,6 +265,7 @@ class Network {
 			{
 				handleCC(controller, self, receivedCC) {
 					if (network.silenced.has(id)) return { action: "stop" }; // out of range: no answer
+				if (receivedCC.constructor.name === "ManufacturerSpecificCCGet" && network.unidentified.delete(id)) return { action: "stop" };
 					// rejects what it is told to do: a supervised command gets a Fail status back
 					if (network.rejecting.has(id) && receivedCC.constructor.name.endsWith("Set")) return { action: "fail" };
 				},
@@ -328,6 +332,7 @@ class Network {
 				// generate it now, so the test knows them before including (as printed on a real device's label)
 				const probe = await MockNode.create({ id, controller: this.controller, capabilities: caps });
 				if (request.silent) this.silenced.add(id); // joins, then never answers: its interview cannot finish
+				if (request.missIdentity) this.unidentified.add(id);
 				this.controller.nodePendingInclusion = {
 					id,
 					capabilities: caps,
@@ -375,6 +380,18 @@ class Network {
 			}
 			case "awake":
 				return { awake: !this.silenced.has(request.node) };
+			case "reset": {
+				// the device is factory reset (its button, or a reset setting): it tells the controller, and is gone
+				const node = this.controller.nodes.get(request.node);
+				const notification = new DeviceResetLocallyCCNotification({ nodeId: OWN_NODE_ID });
+				// a securely included device sends it encrypted: zwave-js drops it in plain text
+				const secure = node.securityManagers.securityManager2;
+				const cc = secure ? Security2CC.encapsulate(notification, node.id, node.securityManagers) : notification;
+				await node.sendToController(createMockZWaveRequestFrame(cc, { ackRequested: false }));
+				this.failed.add(request.node);
+				this.silence(request.node, true);
+				return {};
+			}
 			case "revive": {
 				// the node answers again and announces itself with a report
 				this.silence(request.node, false);

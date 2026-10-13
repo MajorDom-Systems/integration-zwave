@@ -286,6 +286,7 @@ class ZwaveController(AbstractController):
                         home_id=self._controller().home_id or 0,
                         node_id=node.node_id,
                         fingerprint=self._fingerprint(node),
+                        dsk=node.dsk,
                     ),
                 }
             )
@@ -316,7 +317,10 @@ class ZwaveController(AbstractController):
     async def unpair(self, device: ZwaveDevice):
         controller = self._controller()
         node = self._nodes.get(device.id)
-        if node is None:  # not on the network anymore: nothing to remove
+        if node is None:  # not on the network anymore: only a SmartStart entry may be left, it would join again
+            data = device.integration_data
+            if data and data.dsk and await controller.async_get_provisioning_entry(data.dsk):
+                await controller.async_unprovision_smart_start_node(data.dsk)
             self._unbind(device.id)
             return
         # A SmartStart device stays provisioned unless removed from the list: it would join again when powered on
@@ -515,12 +519,22 @@ class ZwaveController(AbstractController):
 
     async def _wait_until_ready(self, node: Node) -> None:
         """Waits for the interview that fills node.values."""
-        if node.ready:
-            return
-        became_ready = asyncio.Event()
-        unsubscribe = node.on("ready", lambda _: became_ready.set())
+        if not node.ready:
+            await self._wait_for(node, "ready")
+        if node.manufacturer_id is None and CommandClass.MANUFACTURER_SPECIFIC in {
+            cc.id for cc in node.command_classes
+        }:
+            # It didn't answer in time (seen right after S2 bootstrapping). Without its identity zwave-js loads no
+            # device file for it (parameter definitions, fixes), and a reused node id can't be told apart
+            log.debug("[PAIR] node_id=%s interviewed again: its identity is missing", node.node_id)
+            await node.async_refresh_info()
+            await self._wait_for(node, "ready")  # carries the node's state; "interview completed" doesn't
+
+    async def _wait_for(self, node: Node, event: str) -> None:
+        happened = asyncio.Event()
+        unsubscribe = node.on(event, lambda _: happened.set())
         try:
-            await asyncio.wait_for(became_ready.wait(), self.READY_TIMEOUT)
+            await asyncio.wait_for(happened.wait(), self.READY_TIMEOUT)
         except TimeoutError:
             raise TimeoutError(
                 "The device did not finish its interview: wake it up (or move it closer) and pair it again"
