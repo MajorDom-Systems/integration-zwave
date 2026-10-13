@@ -108,12 +108,10 @@ just talks JSON over a WebSocket to it.
   - `qr` — the device's QR code (`90…`); malformed codes are rejected. An S2 code includes the device in the
     window; a **SmartStart** code provisions it instead: zwave-js includes it securely, with no PIN, whenever it is
     powered on (hours later, after installation), and it then arrives as a discovery. Unpairing removes it from
-    the provisioning list, or it would join again.
+    the provisioning list (also once it left by itself, by a factory reset), or it would join again.
   - none — the device joins, but without the S2 Authenticated / Access Control classes (they need the
     PIN); its discovery's `last_error` says so.
   - `secret` — not supported.
-
-  The Hub does not pass credentials to `start_pairing_window` yet (the SDK's `develop` has the parameter).
 
 ### Needs
 
