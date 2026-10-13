@@ -1,0 +1,138 @@
+// MajorDom override of zwave-js's file (taken from its priority dir) until it is fixed upstream: firmware 10.13
+// takes parameter 120 as 4 bytes and resets only on 0x55555555 (the 1-byte value 1 is refused).
+{
+	"manufacturer": "Shelly Europe Ltd.",
+	"manufacturerId": "0x0460",
+	"label": "QNSW-001X16",
+	"description": "Wave 1",
+	"devices": [
+		{
+			"productType": "0x0002",
+			"productId": "0x0083",
+			"zwaveAllianceId": [4922, 5005, 5020]
+		}
+	],
+	"firmwareVersion": {
+		"min": "0.0",
+		"max": "255.255"
+	},
+	"associations": {
+		"1": {
+			"label": "Lifeline",
+			"maxNodes": 9,
+			"isLifeline": true
+		},
+		"2": {
+			"label": "SW1: On/Off",
+			"maxNodes": 9
+		},
+		"3": {
+			"label": "SW1: Start/Stop Level Change",
+			"maxNodes": 9
+		}
+	},
+	"paramInformation": [
+		{
+			"#": "1",
+			"$import": "~/0x0460/templates/wave_template.json#switch_type",
+			"label": "SW1 Switch Type"
+		},
+		{
+			"#": "7",
+			"$if": "firmwareVersion >= 13.0",
+			"$import": "~/0x0460/templates/wave_template.json#detached_mode",
+			"label": "Detach O Output"
+		},
+		{
+			"#": "17",
+			"$import": "~/templates/master_template.json#state_after_power_failure_prev_off",
+			"label": "O1: State After Power Failure"
+		},
+		{
+			"#": "19",
+			"$import": "~/0x0460/templates/wave_template.json#auto_off_timer",
+			"label": "O1: Auto-Off Timer"
+		},
+		{
+			"#": "20",
+			"$import": "~/0x0460/templates/wave_template.json#auto_on_timer",
+			"label": "O1: Auto-On Timer"
+		},
+		{
+			"#": "25",
+			"$import": "~/0x0460/templates/wave_template.json#timer_unit",
+			"label": "O1: Auto-On/Off Timer Unit"
+		},
+		{
+			"#": "23",
+			"$import": "~/0x0460/templates/wave_template.json#out_relay_type",
+			"label": "O1: Relay Type"
+		},
+		{
+			"#": "91",
+			"$if": "firmwareVersion < 13.0",
+			"$import": "~/0x0460/templates/wave_template.json#alarm_configuration",
+			"label": "Alarm Configuration: Water"
+		},
+		{
+			"#": "92",
+			"$if": "firmwareVersion < 13.0",
+			"$import": "~/0x0460/templates/wave_template.json#alarm_configuration",
+			"label": "Alarm Configuration: Smoke"
+		},
+		{
+			"#": "93",
+			"$if": "firmwareVersion < 13.0",
+			"$import": "~/0x0460/templates/wave_template.json#alarm_configuration",
+			"label": "Alarm Configuration: CO"
+		},
+		{
+			"#": "94",
+			"$if": "firmwareVersion < 13.0",
+			"$import": "~/0x0460/templates/wave_template.json#alarm_configuration",
+			"label": "Alarm Configuration: Heat"
+		},
+		{
+			"#": "120",
+			"$if": "firmwareVersion < 13.0",
+			"label": "Factory Reset",
+			"description": "Reset to factory default settings and remove from the Z-Wave network.",
+			"valueSize": 4,
+			"unsigned": true,
+			"defaultValue": 0,
+			"allowManualEntry": false,
+			"options": [
+				{
+					"label": "Idle",
+					"value": 0
+				},
+				{
+					"label": "Factory reset",
+					"value": 1431655765
+				}
+			]
+		},
+		{
+			"#": "120",
+			"$import": "~/0x0460/templates/wave_template.json#factory_reset"
+		},
+		{
+			"#": "201",
+			"$import": "~/0x0460/templates/wave_template.json#serial_number",
+			"label": "Serial Number: Part 1"
+		},
+		{
+			"#": "202",
+			"$import": "~/0x0460/templates/wave_template.json#serial_number",
+			"label": "Serial Number: Part 2"
+		},
+		{
+			"#": "203",
+			"$import": "~/0x0460/templates/wave_template.json#serial_number",
+			"label": "Serial Number: Part 3"
+		}
+	],
+	"metadata": {
+		"$import": "~/0x0460/templates/wave_template.json#default_metadata"
+	}
+}

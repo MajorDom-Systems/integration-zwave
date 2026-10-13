@@ -1,6 +1,7 @@
 """zwave-js-server: the service that owns the Z-Wave stick; this integration drives it over WebSocket."""
 
 import secrets
+from pathlib import Path
 
 from majordom_integration_sdk import Endpoint, Need, Service
 from pydantic import BaseModel, Field
@@ -33,7 +34,8 @@ ZWAVE_JS = Service(
         "network_mode": "host",
         "userns_mode": "host",  # a remapped user can't open the stick on hosts with userns-remap
         "devices": ["{links.zwave.url}:/dev/zwave"],
-        "volumes": ["{data}:/cache"],
+        # our device files take precedence over zwave-js's own (the image's priority dir)
+        "volumes": ["{data}:/cache", f"{Path(__file__).parent / 'device_configs'}:/cache/config:ro"],
         "environment": {
             "S0_LEGACY_KEY": "{settings.s0_legacy}",
             "S2_UNAUTHENTICATED_KEY": "{settings.s2_unauthenticated}",

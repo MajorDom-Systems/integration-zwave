@@ -56,6 +56,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry]
 requires-poetry = ">=2.0"
 packages = [{ include = "majordom_zwave" }]
+include = [{ path = "majordom_zwave/device_configs", format = ["sdist", "wheel"] }]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
