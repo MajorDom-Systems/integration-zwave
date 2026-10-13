@@ -108,3 +108,21 @@ async def test_unpairing_a_smart_start_device_that_reset_itself_removes_its_prov
     await controller.unpair(await stored(controller, device.id))
 
     assert label["dsk"] not in await provisioned(network)  # or it would join again at its next power-up
+
+
+async def test_a_smart_start_device_that_reset_itself_is_not_taken_back_in(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    """A factory reset means leaving the network: on the SmartStart list, it would join again the moment it starts."""
+    await controller.start()
+    label = await provision(controller, network)
+    await network.power_on(5)
+    await wait_until(lambda: output.received_discoveries, 20, "the device to join")
+    discovery = output.received_discoveries[-1]
+    await hub_creates_device(controller.dependencies, discovery)
+    device = await stored(controller, await controller.pair_device(discovery, None))
+
+    await network.reset(5)
+    await wait_until(lambda: device.id in output.lost_devices, 10, "the device to leave")
+
+    assert label["dsk"] not in await provisioned(network)

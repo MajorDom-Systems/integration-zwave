@@ -141,6 +141,26 @@ async def test_a_device_excluded_elsewhere_is_lost_with_a_reason(
     assert (await stored(controller, device.id)).last_error
 
 
+async def test_a_dead_device_that_then_leaves_says_it_left(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    """A factory reset first looks like a device that stopped answering; the reason must then say it left."""
+    await controller.start()
+    device = await pair(controller, output, network)
+    await network.silence(5)
+    with contextlib.suppress(ConnectionError):
+        await command(controller, device, param(device, SWITCH), True)
+    await wait_until(lambda: device.id in output.lost_devices, 10, "the silent device to be lost")
+
+    await network.reset(5)
+
+    for _ in range(100):
+        if "removed" in ((await stored(controller, device.id)).last_error or ""):
+            break
+        await asyncio.sleep(0.1)
+    assert "removed" in ((await stored(controller, device.id)).last_error or "")
+
+
 async def test_another_device_reusing_a_node_id_is_not_taken_for_the_paired_one(
     controller: ZwaveController, deps, output: RecordingControllerOutput, make_network
 ):

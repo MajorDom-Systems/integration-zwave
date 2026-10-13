@@ -1,6 +1,9 @@
 """Commands: Hub → device, and what is reported back."""
 
+import asyncio
+
 import pytest
+from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput
 
 from majordom_zwave import ZwaveController
@@ -93,3 +96,24 @@ async def test_a_read_only_parameter_cannot_be_commanded(
 
     with pytest.raises(ValueError):
         await command(controller, device, param(device, "49-0-Air temperature"), 30)
+
+
+async def test_a_secure_device_that_ignored_a_command_gets_a_fresh_session_and_the_command_again(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork, monkeypatch
+):
+    """A device that lost power can keep a dead S2 session and never ask for a new one (seen on a Shelly Wave): it
+    takes commands without acting on them. A nonce from the controller starts a new session."""
+    monkeypatch.setattr(ZwaveController, "VERIFY_DELAY", 0.5)
+    await controller.start()
+    pin = lambda label: ProvidedCredentials(type=CredentialsType.code, value=label["pin"])  # noqa: E731
+    device = await pair(controller, output, network, 5, "secure", credentials=pin)
+    switch = param(device, SWITCH)
+    await network.desync(5)
+
+    await command(controller, device, switch, True)
+
+    for _ in range(50):
+        if await network.switch(5):
+            break
+        await asyncio.sleep(0.1)
+    assert await network.switch(5) is True

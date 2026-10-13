@@ -143,6 +143,7 @@ class Network {
 	silenced = new Set(); // node ids that stop responding (no ACK, no reply)
 	rejecting = new Set(); // node ids that refuse commands
 	unidentified = new Set(); // node ids that miss the first Manufacturer Specific query (busy right after S2 bootstrapping)
+	desynced = new Set(); // node ids whose S2 session died with a power cut: they ignore S2 until sent a nonce
 	removeCallbackId = undefined; // of the running exclusion, to complete it on request
 	adding = false; // an inclusion is running (see the AddNodeToNetworkRequest behaviors)
 	pendingDsk = undefined; // of the device waiting to join
@@ -266,6 +267,11 @@ class Network {
 				handleCC(controller, self, receivedCC) {
 					if (network.silenced.has(id)) return { action: "stop" }; // out of range: no answer
 				if (receivedCC.constructor.name === "ManufacturerSpecificCCGet" && network.unidentified.delete(id)) return { action: "stop" };
+				if (network.desynced.has(id)) {
+					// like the Shelly Wave seen in the cage: it never asks for a new session, only takes one
+					if (receivedCC.constructor.name === "Security2CCNonceReport") network.desynced.delete(id);
+					else if (receivedCC.encapsulatingCC?.constructor.name.startsWith("Security2CC")) return { action: "stop" };
+				}
 					// rejects what it is told to do: a supervised command gets a Fail status back
 					if (network.rejecting.has(id) && receivedCC.constructor.name.endsWith("Set")) return { action: "fail" };
 				},
@@ -359,6 +365,11 @@ class Network {
 			case "reject":
 				this.rejecting.add(request.node);
 				return {};
+			case "desync":
+				this.desynced.add(request.node);
+				return {};
+			case "switch": // what the device's relay really is, whatever zwave-js assumes
+				return { value: this.controller.nodes.get(request.node).state.get("BinarySwitch_currentValue") ?? false };
 			case "wake": {
 				// a sleeping device wakes up (its interval elapsed, or its button): it takes queued commands, then sleeps
 				const node = this.controller.nodes.get(request.node);

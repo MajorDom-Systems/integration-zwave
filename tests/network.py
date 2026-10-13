@@ -99,6 +99,14 @@ class MockNetwork:
         """The node refuses the commands it gets (a supervised command is answered with a Fail status)."""
         await self.call("reject", node=node)
 
+    async def desync(self, node: int) -> None:
+        """The node's S2 session dies (a power cut): it ignores S2 until the controller sends it a nonce."""
+        await self.call("desync", node=node)
+
+    async def switch(self, node: int) -> bool:
+        """What the device's relay really is, whatever zwave-js assumes."""
+        return (await self.call("switch", node=node))["value"]
+
     async def fail(self, node: int) -> None:
         await self.call("fail", node=node)
 

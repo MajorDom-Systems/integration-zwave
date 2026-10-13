@@ -13,7 +13,14 @@ from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import ParameterRole
 from zwave_js_server.client import Client as ZwaveClient
-from zwave_js_server.const import CommandClass, InclusionStrategy, NodeStatus, SecurityClass, SetValueStatus
+from zwave_js_server.const import (
+    CommandClass,
+    InclusionStrategy,
+    NodeStatus,
+    RemoveNodeReason,
+    SecurityClass,
+    SetValueStatus,
+)
 from zwave_js_server.model.controller import Controller
 from zwave_js_server.model.controller.inclusion_and_provisioning import InclusionGrant
 from zwave_js_server.model.node import Node
@@ -35,6 +42,7 @@ SMART_START_QR = re.compile(r"9001\d+")  # a QR code's version digits: 00 is S2,
 APPLIED = {SetValueStatus.SUCCESS, SetValueStatus.SUCCESS_UNSUPERVISED, SetValueStatus.WORKING}
 # Security classes that need the device's PIN; granted only when the PIN (or DSK) was given
 AUTHENTICATED = {SecurityClass.S2_AUTHENTICATED, SecurityClass.S2_ACCESS_CONTROL}
+S2 = {SecurityClass.S2_UNAUTHENTICATED, *AUTHENTICATED}
 
 
 class ZwaveController(AbstractController):
@@ -171,7 +179,9 @@ class ZwaveController(AbstractController):
         controller = self._controller()
         self._available.clear()  # report every device's availability afresh
         self._track(controller.on("node added", lambda data: self._spawn(self._node_added(data["node"], data))))
-        self._track(controller.on("node removed", lambda data: self._spawn(self._node_removed(data["node"]))))
+        self._track(
+            controller.on("node removed", lambda data: self._spawn(self._node_removed(data["node"], data["reason"])))
+        )
         self._track(
             controller.on("grant security classes", lambda data: self._spawn(self._grant(data["requested_grant"])))
         )
@@ -422,13 +432,33 @@ class ZwaveController(AbstractController):
         await self._update_device(device.id, last_error=None)
         if awake and result is not None and result.status == SetValueStatus.SUCCESS_UNSUPERVISED:
             state = node.values.get(parameter.integration_data.state_value_id or value.value_id, value)
-            self._spawn(self._verify(node, state, mapper.to_device(value, command.value)))
+            self._spawn(self._verify(node, value, state, mapper.to_device(value, command.value)))
 
-    async def _verify(self, node: Node, state: Value, sent: Any) -> None:
-        """Reads a value back after an unconfirmed set, unless zwave-js already did (its value then is the sent one)."""
+    async def _verify(self, node: Node, value: Value, state: Value, sent: Any) -> None:
+        """After an unconfirmed set: sends it again over a renewed S2 session when the old one is dead, or reads the
+        value back unless zwave-js already did (its value then is the sent one)."""
         await asyncio.sleep(self.VERIFY_DELAY)
-        if state.metadata.readable and state.value != sent and node.status != NodeStatus.DEAD:
+        if node.status == NodeStatus.DEAD:
+            return
+        if node.highest_security_class in S2 and not await self._answers_securely(node):
+            # A device that lost power can keep a dead S2 session and never ask for a new one (seen on a Shelly
+            # Wave): it takes commands without acting on them, and zwave-js reports them applied. A nonce from the
+            # controller starts a new session
+            log.info("[S2] node_id=%s doesn't answer securely: renewing its session", node.node_id)
+            await node.async_invoke_cc_api(CommandClass.SECURITY_2, "sendNonce")
+            await node.async_set_value(value, sent)
+        elif state.metadata.readable and state.value != sent:
             await node.async_poll_value(state)
+
+    @staticmethod
+    async def _answers_securely(node: Node) -> bool:
+        try:
+            supported = await node.async_invoke_cc_api(
+                CommandClass.SECURITY_2, "getSupportedCommands", node.highest_security_class
+            )
+        except Exception:  # noqa: BLE001  no answer, however zwave-js puts it
+            return False
+        return supported is not None
 
     # =========================================================================
     # Private helpers
@@ -620,8 +650,12 @@ class ZwaveController(AbstractController):
         result = data.get("result") or {}
         await self._offer(node, low_security=bool(result.get("lowSecurity")))
 
-    async def _node_removed(self, node: Node) -> None:
-        log.debug("[REMOVED] node_id=%s", node.node_id)
+    async def _node_removed(self, node: Node, reason: RemoveNodeReason) -> None:
+        log.debug("[REMOVED] node_id=%s (%s)", node.node_id, reason)
+        controller = self._controller()
+        if reason == RemoveNodeReason.RESET and node.dsk and await controller.async_get_provisioning_entry(node.dsk):
+            # a factory reset means leaving: on the SmartStart list, it would join again the moment it starts
+            await controller.async_unprovision_smart_start_node(node.dsk)
         if self._removal is not None and not self._removal.done():
             self._removal.set_result(node.node_id)
         for device_id, joined in list(self._joined.items()):
@@ -664,6 +698,8 @@ class ZwaveController(AbstractController):
     async def _set_available(self, device_id: UUID, available: bool, reason: str | None = None) -> None:
         """Reports a change of availability (with its reason as the device's last error)."""
         if self._available.get(device_id) == available:
+            if not available and reason:  # a better reason for the same state (not answering, then removed)
+                await self._update_device(device_id, last_error=reason)
             return
         self._available[device_id] = available
         await self._update_device(device_id, available=available, last_error=None if available else reason)
