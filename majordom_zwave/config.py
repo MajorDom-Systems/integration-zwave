@@ -26,12 +26,15 @@ class ZwaveNetwork(BaseModel):
 ZWAVE_JS = Service(
     "zwave-js",
     needs=[Need("zwave", ["serial"])],
-    provides=[Endpoint("zwave", "ws", "ws://127.0.0.1:3000")],
+    provides=[Endpoint("zwave", "ws", "ws://127.0.0.1:{ports.api}")],
+    ports={"api": 3000},
     settings=ZwaveNetwork,
     compose={
         # :latest pinned by digest (2026-10-08); bump on purpose
         "image": "ghcr.io/kpine/zwave-js-server@sha256:19592f8e979525ac6f4e6cac22b28324edfaa757c9d2da3d6fec9c4b2ddd18a8",  # noqa: E501
         "network_mode": "host",
+        # the image's own command, with a port it doesn't take from the environment
+        "command": ["server", "/dev/zwave", "--config", "options.js", "--disable-dns-sd", "--port", "{ports.api}"],
         "userns_mode": "host",  # a remapped user can't open the stick on hosts with userns-remap
         "devices": ["{links.zwave.url}:/dev/zwave"],
         # our device files take precedence over zwave-js's own (the image's priority dir)
