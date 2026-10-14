@@ -204,7 +204,7 @@ the mock network only; to be re-run on hardware before release):
 - [x] **Diagnosable** — per-area log tags (`[PAIR]`, `[CONNECT]`, …), reasons in `last_error`, causes chained
 - [x] **Rich parameter metadata** — role, visibility, units, limits, enum labels, main parameter; names and buckets
       reviewed against the docs' parameter UX for every hosted CC, and audited (`parameter_audit`)
-- [ ] **Owned** — add a listed maintainer
+- [x] **Owned** — maintained by Parker Industries
 - [ ] _nice-to-have:_ localizable naming · firmware updates · user-facing supported-device docs
 
 ### Notes
