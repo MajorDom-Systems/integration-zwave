@@ -268,7 +268,7 @@ class Network {
 					if (network.silenced.has(id)) return { action: "stop" }; // out of range: no answer
 				if (receivedCC.constructor.name === "ManufacturerSpecificCCGet" && network.unidentified.delete(id)) return { action: "stop" };
 				if (network.desynced.has(id)) {
-					// like the Shelly Wave seen in the cage: it never asks for a new session, only takes one
+					// like a real Shelly Wave: it never asks for a new session, only takes one
 					if (receivedCC.constructor.name === "Security2CCNonceReport") network.desynced.delete(id);
 					else if (receivedCC.encapsulatingCC?.constructor.name.startsWith("Security2CC")) return { action: "stop" };
 				}
