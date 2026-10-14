@@ -86,11 +86,10 @@ the same server Home Assistant's Z-Wave JS integration uses. `zwave-js-server` i
 the serial connection to the Z-Wave USB controller and speaks the Z-Wave protocol; this integration
 just talks JSON over a WebSocket to it.
 
-- The hub runs it for you: `majordom_zwave/config.py` declares the server as a service that needs
-  a Z-Wave stick, with the network keys as settings (generated once — back them up) and the RF
-  region taken from the hub.
-- Standalone, run `zwave-js-server` yourself and pass its URL as
-  `links={"zwave": Endpoint("zwave", "ws", "ws://localhost:3000")}`.
+- Run `zwave-js-server` yourself (commonly via Docker) on whatever machine has the Z-Wave USB
+  controller attached.
+- Point this integration at it with the `ZWAVE_SERVER_URL` environment variable
+  (default `ws://localhost:3000`) — see `majordom_zwave/config.py`.
 - The integration keeps reconnecting (1 → 30 s backoff) while the server is unreachable; paired devices are
   reported unavailable meanwhile, with the reason as their `last_error`.
 
@@ -108,25 +107,22 @@ just talks JSON over a WebSocket to it.
   - `qr` — the device's QR code (`90…`); malformed codes are rejected. An S2 code includes the device in the
     window; a **SmartStart** code provisions it instead: zwave-js includes it securely, with no PIN, whenever it is
     powered on (hours later, after installation), and it then arrives as a discovery. Unpairing removes it from
-    the provisioning list (also once it left by itself, by a factory reset), or it would join again.
+    the provisioning list, or it would join again.
   - none — the device joins, but without the S2 Authenticated / Access Control classes (they need the
     PIN); its discovery's `last_error` says so.
   - `secret` — not supported.
 
-### Needs
+  The Hub does not pass credentials to `start_pairing_window` yet (the SDK's `develop` has the parameter).
 
-| Capability | Required | Provided by |
-|------------|----------|-------------|
-| `zwave/ws` | yes | the `zwave-js` service below; standalone, any `zwave-js-server` you run |
-| `zwave/serial` (for `zwave-js`) | yes | a Z-Wave USB controller (e.g. Aeotec/Zooz Z-Stick), recognised by the hub through the Serial API |
+### Required harness
 
-- **Services it brings:** `zwave-js`, a [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
-  container (`majordom_zwave/config.py`), which the hub runs while a Z-Wave stick is plugged in.
-- **Settings:** the network's security keys (`ZwaveNetwork`, settings of the `zwave-js` service),
-  generated once. Back them up: without them, securely included devices have to be re-included.
-- **Context:** the RF region (`context.region`, from the hub's region setting).
-- **OS / permissions:** network reachability (TCP) to `zwave-js-server` when you run it on another
-  host yourself.
+- **Hardware adapters:** a Z-Wave USB controller (e.g. Aeotec/Zooz Z-Stick) — but it's attached to
+  whatever host runs `zwave-js-server`, not necessarily the Hub. This integration doesn't use
+  `dependencies.hardware_interfaces`; the radio is abstracted behind the server.
+- **Third-party software services:** [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
+  (Node.js) must be running and reachable at `ZWAVE_SERVER_URL`.
+- **OS / permissions:** network reachability (TCP) to the `zwave-js-server` host:port. No special
+  permissions needed on the Hub's own host.
 
 ### Protocol stack
 
