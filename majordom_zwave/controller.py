@@ -49,7 +49,7 @@ class ZwaveController(AbstractController):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
 
     needs = [Need("zwave", ["ws"])]
-    services = [config.ZWAVE_JS]
+    services = [config.ZWAVE_JS_SERVER]
 
     name: ClassVar[str] = "ZWave"
 

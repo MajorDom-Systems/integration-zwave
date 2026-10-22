@@ -23,8 +23,8 @@ class ZwaveNetwork(BaseModel):
     lr_s2_access_control: str = Field(default_factory=_key, title="Long Range S2 Access Control key")
 
 
-ZWAVE_JS = Service(
-    "zwave-js",
+ZWAVE_JS_SERVER = Service(
+    "zwave-js-server",
     needs=[Need("zwave", ["serial"])],
     provides=[Endpoint("zwave", "ws", "ws://127.0.0.1:{ports.api}")],
     ports={"api": 3000},
