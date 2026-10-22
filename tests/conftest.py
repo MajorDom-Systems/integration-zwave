@@ -57,7 +57,7 @@ async def make_network(deps: AbstractController.Dependencies) -> AsyncIterator[C
         network = MockNetwork(nodes or [])
         networks.append(network)
         await network.start(serve=serve)
-        cast(dict, deps.links)["zwave"] = Endpoint("zwave", "ws", network.url)
+        cast(dict, deps.links)["zwave"] = Endpoint("zwave", "zwave-js-ws", network.url)
         return network
 
     yield make

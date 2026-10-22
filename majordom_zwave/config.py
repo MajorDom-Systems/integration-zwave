@@ -25,8 +25,8 @@ class ZwaveNetwork(BaseModel):
 
 ZWAVE_JS_SERVER = Service(
     "zwave-js-server",
-    needs=[Need("zwave", ["serial"])],
-    provides=[Endpoint("zwave", "ws", "ws://127.0.0.1:{ports.api}")],
+    needs=[Need("zwave", ["serial-api"])],
+    provides=[Endpoint("zwave", "zwave-js-ws", "ws://127.0.0.1:{ports.api}")],
     ports={"api": 3000},
     settings=ZwaveNetwork,
     compose={

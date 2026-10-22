@@ -48,7 +48,7 @@ S2 = {SecurityClass.S2_UNAUTHENTICATED, *AUTHENTICATED}
 class ZwaveController(AbstractController):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
 
-    needs = [Need("zwave", ["ws"])]
+    needs = [Need("zwave", ["zwave-js-ws"])]
     services = [config.ZWAVE_JS_SERVER]
 
     name: ClassVar[str] = "ZWave"
