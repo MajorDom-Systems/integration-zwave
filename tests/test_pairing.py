@@ -98,7 +98,7 @@ async def test_a_device_that_never_becomes_ready_fails_pairing_and_stays_discove
 ):
     await controller.start()
     discovery = await discover(controller, output, network, 5, "switch", silent=True)  # joins, then never answers
-    await hub_creates_device(controller.dependencies, discovery)
+    await hub_creates_device(controller.platform, discovery)
 
     with pytest.raises(TimeoutError):
         await controller.pair_device(discovery, None)

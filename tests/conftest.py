@@ -4,9 +4,9 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
 
 import pytest
-from majordom_integration_sdk import Endpoint
-from majordom_integration_sdk.controller import AbstractController
-from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_dependencies
+from majordom_integration_sdk import Endpoint, Peripherals
+from majordom_integration_sdk.controller import Platform
+from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 
 from majordom_zwave import ZwaveController
 from tests.network import MockNetwork
@@ -15,13 +15,18 @@ INTEGRATION = "ZWave"
 
 
 @pytest.fixture
-def deps() -> AbstractController.Dependencies:
-    # A mutable links dict, so a network started later can point the controller at itself.
-    return build_test_dependencies(integration=INTEGRATION).copy(links={})
+def deps() -> Platform:
+    return build_test_platform(integration=INTEGRATION)
 
 
 @pytest.fixture
-def output(deps: AbstractController.Dependencies) -> RecordingControllerOutput:
+def peripherals() -> Peripherals:
+    # Kept by the controller, so a network started later can point it at itself.
+    return Peripherals()
+
+
+@pytest.fixture
+def output(deps: Platform) -> RecordingControllerOutput:
     return cast(RecordingControllerOutput, deps.output)
 
 
@@ -42,14 +47,14 @@ def patient(fast: None, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-async def controller(deps: AbstractController.Dependencies, fast: None) -> AsyncIterator[ZwaveController]:
-    controller = ZwaveController(deps)
+async def controller(deps: Platform, peripherals: Peripherals, fast: None) -> AsyncIterator[ZwaveController]:
+    controller = ZwaveController(deps, peripherals)
     yield controller
     await controller.stop()
 
 
 @pytest.fixture
-async def make_network(deps: AbstractController.Dependencies) -> AsyncIterator[Callable[..., Awaitable[MockNetwork]]]:
+async def make_network(peripherals: Peripherals) -> AsyncIterator[Callable[..., Awaitable[MockNetwork]]]:
     """Start a mock network (with the given nodes already included) and point the integration at it."""
     networks: list[MockNetwork] = []
 
@@ -57,7 +62,7 @@ async def make_network(deps: AbstractController.Dependencies) -> AsyncIterator[C
         network = MockNetwork(nodes or [])
         networks.append(network)
         await network.start(serve=serve)
-        cast(dict, deps.links)["zwave"] = Endpoint("zwave", "zwave-js-ws", network.url)
+        peripherals["zwave"] = Endpoint("zwave", "zwave-js-ws", network.url)
         return network
 
     yield make

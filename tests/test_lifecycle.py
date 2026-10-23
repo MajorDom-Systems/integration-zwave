@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 
 import aiohttp
-from majordom_integration_sdk.controller import AbstractController
+from majordom_integration_sdk.controller import Platform
 from majordom_integration_sdk.testing import RecordingControllerOutput
 from zwave_js_server.client import Client
 
@@ -15,10 +15,10 @@ from tests.network import MockNetwork
 SWITCH = "37-0-targetValue"
 
 
-async def restart(controller: ZwaveController, deps: AbstractController.Dependencies) -> ZwaveController:
+async def restart(controller: ZwaveController, deps: Platform) -> ZwaveController:
     """Stop and start the integration again, with the Hub's data kept (a Hub restart)."""
     await controller.stop()
-    again = ZwaveController(deps)
+    again = ZwaveController(deps, controller.peripherals)
     await again.start()
     return again
 
@@ -173,7 +173,7 @@ async def test_another_device_reusing_a_node_id_is_not_taken_for_the_paired_one(
     # while the Hub was off, the device was replaced: another product now has node id 5
     await make_network([{"node": 5, "kind": "switch", "productId": 2}])
     output.connected_devices.clear()
-    again = ZwaveController(deps)
+    again = ZwaveController(deps, controller.peripherals)
     await again.start()
     try:
         assert device.id not in output.connected_devices

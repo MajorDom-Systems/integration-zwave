@@ -47,7 +47,7 @@ async def test_a_provisioned_device_joins_when_powered_on_and_pairs_securely(
     await wait_until(lambda: output.received_discoveries, 20, "the device to join")
     discovery = output.received_discoveries[-1]
     assert discovery.last_error is None  # S2 from its QR code: no PIN needed
-    await hub_creates_device(controller.dependencies, discovery)
+    await hub_creates_device(controller.platform, discovery)
     device = await stored(controller, await controller.pair_device(discovery, None))
 
     param(device, SWITCH)  # only supported securely: present only if S2 bootstrapping succeeded
@@ -72,7 +72,7 @@ async def test_unpairing_a_smart_start_device_removes_its_provisioning(
     await network.power_on(5)
     await wait_until(lambda: output.received_discoveries, 20, "the device to join")
     discovery = output.received_discoveries[-1]
-    await hub_creates_device(controller.dependencies, discovery)
+    await hub_creates_device(controller.platform, discovery)
     device = await stored(controller, await controller.pair_device(discovery, None))
 
     unpairing = asyncio.create_task(controller.unpair(device))
@@ -100,7 +100,7 @@ async def test_unpairing_a_smart_start_device_that_reset_itself_removes_its_prov
     await network.power_on(5)
     await wait_until(lambda: output.received_discoveries, 20, "the device to join")
     discovery = output.received_discoveries[-1]
-    await hub_creates_device(controller.dependencies, discovery)
+    await hub_creates_device(controller.platform, discovery)
     device = await stored(controller, await controller.pair_device(discovery, None))
 
     await network.reset(5)  # it left by itself: no node is left to remove
@@ -119,7 +119,7 @@ async def test_a_smart_start_device_that_reset_itself_is_not_taken_back_in(
     await network.power_on(5)
     await wait_until(lambda: output.received_discoveries, 20, "the device to join")
     discovery = output.received_discoveries[-1]
-    await hub_creates_device(controller.dependencies, discovery)
+    await hub_creates_device(controller.platform, discovery)
     device = await stored(controller, await controller.pair_device(discovery, None))
 
     await network.reset(5)

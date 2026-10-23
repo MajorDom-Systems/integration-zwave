@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import re
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from typing import Any, ClassVar, override
 from uuid import UUID
 
 from aiohttp import ClientSession
 from majordom_integration_sdk import Need
-from majordom_integration_sdk.controller import AbstractController
+from majordom_integration_sdk.controller import AbstractController, Platform
+from majordom_integration_sdk.peripherals import Bound
 from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
@@ -62,8 +63,8 @@ class ZwaveController(AbstractController):
     # the value is read back here when it has not changed, so the Hub learns what the device actually did
     VERIFY_DELAY: ClassVar[float] = 6
 
-    def __init__(self, dependencies: AbstractController.Dependencies):
-        super().__init__(dependencies)
+    def __init__(self, platform: Platform, peripherals: Mapping[str, Bound] | None = None):
+        super().__init__(platform, peripherals)
         self._session: ClientSession | None = None
         self._zwave_client: ZwaveClient | None = None
         self._supervisor: asyncio.Task | None = None
@@ -111,7 +112,7 @@ class ZwaveController(AbstractController):
         """Connects to zwave-js-server and keeps reconnecting; an unreachable server is reported, not raised."""
         self._session = ClientSession()
         self._first_attempt.clear()
-        self._supervisor = asyncio.create_task(self._run(self.dependencies.links["zwave"].url, self._session))
+        self._supervisor = asyncio.create_task(self._run(self.peripherals.endpoint("zwave").url, self._session))
         await self._first_attempt.wait()
 
     async def stop(self):
@@ -158,7 +159,7 @@ class ZwaveController(AbstractController):
                 log.warning("[CONNECT] %s", reason)
                 await self._detach(reason)
                 if not self._first_attempt.is_set():
-                    await self.dependencies.output.controller_did_encounter_error(self, reason, True)
+                    await self.platform.output.controller_did_encounter_error(self, reason, True)
                     self._first_attempt.set()
             finally:
                 if listening is not None:
@@ -187,7 +188,7 @@ class ZwaveController(AbstractController):
         )
         self._track(controller.on("validate dsk and enter pin", lambda data: self._spawn(self._enter_pin())))
 
-        async with self.dependencies.make_device_repository() as repo:
+        async with self.platform.make_device_repository() as repo:
             devices = [d for d in await repo.get_all(as_=ZwaveDevice) if d.integration_data is not None]
         claimed: set[int] = set()
         for device in devices:
@@ -272,7 +273,7 @@ class ZwaveController(AbstractController):
             if credentials is not None and credentials.type != CredentialsType.none:
                 raise ValueError("Z-Wave credentials are given when opening the pairing window")
             await self._wait_until_ready(node)
-            async with self.dependencies.make_device_repository() as repo:
+            async with self.platform.make_device_repository() as repo:
                 hub_device = await repo.get(discovery.id, as_=ZwaveDevice)  # the Hub creates it before pairing
             if hub_device is None:
                 raise LookupError("The Hub has not created a device for this discovery")
@@ -300,7 +301,7 @@ class ZwaveController(AbstractController):
                     ),
                 }
             )
-            async with self.dependencies.make_device_repository() as repo:
+            async with self.platform.make_device_repository() as repo:
                 await repo.save(device)
             log.debug(
                 "[PAIR] node_id=%s mapped schema\n\t%s",
@@ -314,7 +315,7 @@ class ZwaveController(AbstractController):
             log.warning("[PAIR] pairing %s failed: %s", discovery.id, exc)
             failed = known.model_copy(update={"last_error": str(exc)})
             self._discoveries[discovery.id] = failed
-            await self.dependencies.output.controller_did_update_discovery(self, failed)
+            await self.platform.output.controller_did_update_discovery(self, failed)
             raise
 
         self._discoveries.pop(discovery.id, None)
@@ -499,7 +500,7 @@ class ZwaveController(AbstractController):
         return ":".join(f"{i:04x}" for i in ids) if all(i is not None for i in ids) else None
 
     async def _update_device(self, device_id: UUID, **changes: Any) -> None:
-        async with self.dependencies.make_device_repository() as repo:
+        async with self.platform.make_device_repository() as repo:
             device = await repo.get(device_id, as_=ZwaveDevice)
             if device is not None and any(getattr(device, k) != v for k, v in changes.items()):
                 await repo.save(device.model_copy(update=changes))
@@ -531,7 +532,7 @@ class ZwaveController(AbstractController):
         )
         self._discoveries[device_id] = discovery
         log.debug("[DISCOVERY] node_id=%s discovery_id=%s", node.node_id, device_id)
-        await self.dependencies.output.controller_did_receive_discovery(self, discovery)
+        await self.platform.output.controller_did_receive_discovery(self, discovery)
 
     async def _close_pairing_window(self, duration_sec: int) -> None:
         await asyncio.sleep(duration_sec)
@@ -662,7 +663,7 @@ class ZwaveController(AbstractController):
             if joined.node_id == node.node_id:
                 self._joined.pop(device_id)
                 if self._discoveries.pop(device_id, None) is not None:
-                    await self.dependencies.output.controller_did_lose_discovery(self, device_id)
+                    await self.platform.output.controller_did_lose_discovery(self, device_id)
         for device_id, bound in list(self._nodes.items()):
             if bound.node_id == node.node_id:
                 self._unbind(device_id)
@@ -704,9 +705,9 @@ class ZwaveController(AbstractController):
         self._available[device_id] = available
         await self._update_device(device_id, available=available, last_error=None if available else reason)
         if available:
-            await self.dependencies.output.controller_did_connect_device(self, device_id)
+            await self.platform.output.controller_did_connect_device(self, device_id)
         else:
-            await self.dependencies.output.controller_did_lose_device(self, device_id)
+            await self.platform.output.controller_did_lose_device(self, device_id)
 
     async def _value_updated(self, device_id: UUID, value: Value) -> None:
         routes = self._routes.get(device_id, {})
@@ -721,7 +722,7 @@ class ZwaveController(AbstractController):
             parameter_id=self._parameter_id(device_id, parameter_value_id),
             value=mapper.to_hub(value, value.value),
         )
-        await self.dependencies.output.controller_did_receive_events(self, [event])
+        await self.platform.output.controller_did_receive_events(self, [event])
 
     async def _notified(self, device_id: UUID, notification: Any) -> None:
         known = self._events.get(device_id, {})
@@ -733,7 +734,7 @@ class ZwaveController(AbstractController):
             parameter_id = self._parameter_id(device_id, value_id)
             changes.append(DeviceParameterChange(device_id=device_id, parameter_id=parameter_id, value=value))
         if changes:
-            await self.dependencies.output.controller_did_receive_events(self, changes)
+            await self.platform.output.controller_did_receive_events(self, changes)
 
     async def _report_snapshot(self, device_id: UUID, node: Node) -> None:
         events = [
@@ -746,4 +747,4 @@ class ZwaveController(AbstractController):
             if mapper.role(value) != ParameterRole.event and (value.metadata.readable or state is not None)
         ]
         if events:
-            await self.dependencies.output.controller_did_receive_events(self, events)
+            await self.platform.output.controller_did_receive_events(self, events)

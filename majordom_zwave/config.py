@@ -36,7 +36,7 @@ ZWAVE_JS_SERVER = Service(
         # the image's own command, with a port it doesn't take from the environment
         "command": ["server", "/dev/zwave", "--config", "options.js", "--disable-dns-sd", "--port", "{ports.api}"],
         "userns_mode": "host",  # a remapped user can't open the stick on hosts with userns-remap
-        "devices": ["{links.zwave.url}:/dev/zwave"],
+        "devices": ["{peripherals.zwave.url}:/dev/zwave"],
         # our device files take precedence over zwave-js's own (the image's priority dir)
         "volumes": ["{data}:/cache", f"{Path(__file__).parent / 'device_configs'}:/cache/config:ro"],
         "environment": {
