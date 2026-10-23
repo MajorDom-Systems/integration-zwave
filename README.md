@@ -118,7 +118,7 @@ just talks JSON over a WebSocket to it.
 
 - **Hardware adapters:** a Z-Wave USB controller (e.g. Aeotec/Zooz Z-Stick) — but it's attached to
   whatever host runs `zwave-js-server`, not necessarily the Hub. This integration doesn't use
-  `dependencies.hardware_interfaces`; the radio is abstracted behind the server.
+  `self.peripherals` for the stick; the radio is abstracted behind the server.
 - **Third-party software services:** [`zwave-js-server`](https://github.com/zwave-js/zwave-js-server)
   (Node.js) must be running and reachable at `ZWAVE_SERVER_URL`.
 - **OS / permissions:** network reachability (TCP) to the `zwave-js-server` host:port. No special
