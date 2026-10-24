@@ -6,7 +6,7 @@ from typing import Any, ClassVar, override
 from uuid import UUID
 
 from aiohttp import ClientSession
-from majordom_integration_sdk import Need
+from majordom_integration_sdk import IntegrationError, Need
 from majordom_integration_sdk.controller import AbstractController, Platform
 from majordom_integration_sdk.peripherals import Bound
 from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
@@ -55,6 +55,7 @@ class ZwaveController(AbstractController):
     name: ClassVar[str] = "ZWave"
 
     RECONNECT_DELAYS: ClassVar[tuple[float, ...]] = (1, 2, 5, 10, 30)  # then 30 s between attempts
+    REPORT_AFTER_FAILURES: ClassVar[int] = 5  # a lost server is reported once it fails this many reconnects in a row
     READY_TIMEOUT: ClassVar[float] = 120  # a device's interview; a sleeping device finishes it when it wakes up
     EXCLUSION_TIMEOUT: ClassVar[float] = 60  # for the user to put the device into exclusion mode
     IDENTIFY_BLINKS: ClassVar[int] = 5
@@ -149,6 +150,7 @@ class ZwaveController(AbstractController):
                 await self._attach()
                 log.info("[READY] connected to %s", url)
                 attempt = 0
+                await self.platform.output.controller_did_resolve_error(self, "server-unreachable")
                 self._first_attempt.set()
                 await listening
                 raise ConnectionError("the connection to zwave-js-server closed")
@@ -158,8 +160,10 @@ class ZwaveController(AbstractController):
                 reason = f"zwave-js-server at {url} is unreachable: {exc or type(exc).__name__}"
                 log.warning("[CONNECT] %s", reason)
                 await self._detach(reason)
-                if not self._first_attempt.is_set():
-                    await self.platform.output.controller_did_encounter_error(self, reason, True)
+                # at the first attempt, then on each one once the outage lasts; the devices show unavailable meanwhile
+                if not self._first_attempt.is_set() or attempt + 1 >= self.REPORT_AFTER_FAILURES:
+                    error = IntegrationError("server-unreachable", reason)
+                    await self.platform.output.controller_did_encounter_error(self, error)
                     self._first_attempt.set()
             finally:
                 if listening is not None:
