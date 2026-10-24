@@ -1,5 +1,6 @@
 // MajorDom override of zwave-js's file (taken from its priority dir) until it is fixed upstream: firmware 10.13
 // takes parameter 120 as 4 bytes and resets only on 0x55555555 (the 1-byte value 1 is refused).
+// Based on zwave-js (https://github.com/zwave-js/zwave-js), Copyright (c) 2018-2024 AlCalzone, MIT License.
 {
 	"manufacturer": "Shelly Europe Ltd.",
 	"manufacturerId": "0x0460",
