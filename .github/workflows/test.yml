@@ -11,7 +11,9 @@ on:
 jobs:
   test:
     uses: ParkerIndustries/workflows/.github/workflows/test.yml@v1
+    # The team matrix is ["3.12", "3.13"]; the SDK needs 3.13 (type parameter defaults).
     with:
+      python-versions: '["3.13"]'
       # The end-to-end tests run against a mock Z-Wave network (zwave-js's mock controller behind a real
       # zwave-js-server, tests/mock): install it. Node.js comes with the runner.
       setup-script: npm ci --prefix tests/mock --no-audit --no-fund
