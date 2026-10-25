@@ -115,7 +115,7 @@ async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
     assert not output.errors  # one failed reconnect is no outage yet
     await wait_until(lambda: output.errors, 10, "the lost server to be reported")
     await asyncio.sleep(1.5)  # a few more failed reconnects
-    assert list(output.errors) == ["server-unreachable"] and output.errors["server-unreachable"].still_running
+    assert list(output.errors) == ["server-unreachable"] and output.errors["server-unreachable"].is_still_running
 
     await network.serve()
     await wait_until(lambda: not output.errors, 15, "the reconnection to resolve it")
@@ -127,7 +127,7 @@ async def test_starting_without_the_server_does_not_fail_and_connects_once_it_is
     network = await make_network(serve=False)
 
     await controller.start()  # the server is not up yet: reported, not raised
-    assert output.errors["server-unreachable"].still_running
+    assert output.errors["server-unreachable"].is_still_running
 
     await network.serve()
     await wait_until(lambda: controller.connected, 15, "the connection")
