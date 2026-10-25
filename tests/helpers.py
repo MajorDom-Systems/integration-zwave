@@ -31,7 +31,7 @@ async def wait_until(predicate: Callable[[], Any], timeout: float = 10.0, messag
 
 async def hub_creates_device(deps: Platform, discovery: Discovery, name: str = "Hall lamp") -> None:
     """The Hub creates the device (name, room) before it asks to pair it (`DeviceProvider.create_device`)."""
-    async with deps.make_device_repository() as repo:
+    async with deps.make_device_repository(discovery.integration) as repo:
         await repo.save(
             Device(
                 id=discovery.id,
@@ -78,7 +78,7 @@ async def pair(
 
 
 async def stored(controller: ZwaveController, device_id: UUID) -> ZwaveDevice:
-    async with controller.platform.make_device_repository() as repo:
+    async with controller.device_repository() as repo:
         device = await repo.get(device_id, as_=ZwaveDevice)
     assert device is not None, f"device {device_id} is not stored"
     return device

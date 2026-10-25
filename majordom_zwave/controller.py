@@ -1,14 +1,13 @@
 import asyncio
 import logging
 import re
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, override
 from uuid import UUID
 
 from aiohttp import ClientSession
-from majordom_integration_sdk import IntegrationError, Need
+from majordom_integration_sdk import IntegrationError, Need, NoSettings
 from majordom_integration_sdk.controller import AbstractController, Platform
-from majordom_integration_sdk.peripherals import Bound
 from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
@@ -46,13 +45,13 @@ AUTHENTICATED = {SecurityClass.S2_AUTHENTICATED, SecurityClass.S2_ACCESS_CONTROL
 S2 = {SecurityClass.S2_UNAUTHENTICATED, *AUTHENTICATED}
 
 
-class ZwaveController(AbstractController):
+class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
 
     needs = [Need("zwave", ["zwave-js-ws"])]
     services = [config.ZWAVE_JS_SERVER]
 
-    name: ClassVar[str] = "ZWave"
+    name = "ZWave"
 
     RECONNECT_DELAYS: ClassVar[tuple[float, ...]] = (1, 2, 5, 10, 30)  # then 30 s between attempts
     REPORT_AFTER_FAILURES: ClassVar[int] = 5  # a lost server is reported once it fails this many reconnects in a row
@@ -64,8 +63,8 @@ class ZwaveController(AbstractController):
     # the value is read back here when it has not changed, so the Hub learns what the device actually did
     VERIFY_DELAY: ClassVar[float] = 6
 
-    def __init__(self, platform: Platform, peripherals: Mapping[str, Bound] | None = None):
-        super().__init__(platform, peripherals)
+    def __init__(self, platform: Platform, *, settings: NoSettings | None = None):
+        super().__init__(platform, settings=settings)
         self._session: ClientSession | None = None
         self._zwave_client: ZwaveClient | None = None
         self._supervisor: asyncio.Task | None = None
@@ -192,7 +191,7 @@ class ZwaveController(AbstractController):
         )
         self._track(controller.on("validate dsk and enter pin", lambda data: self._spawn(self._enter_pin())))
 
-        async with self.platform.make_device_repository() as repo:
+        async with self.device_repository() as repo:
             devices = [d for d in await repo.get_all(as_=ZwaveDevice) if d.integration_data is not None]
         claimed: set[int] = set()
         for device in devices:
@@ -277,7 +276,7 @@ class ZwaveController(AbstractController):
             if credentials is not None and credentials.type != CredentialsType.none:
                 raise ValueError("Z-Wave credentials are given when opening the pairing window")
             await self._wait_until_ready(node)
-            async with self.platform.make_device_repository() as repo:
+            async with self.device_repository() as repo:
                 hub_device = await repo.get(discovery.id, as_=ZwaveDevice)  # the Hub creates it before pairing
             if hub_device is None:
                 raise LookupError("The Hub has not created a device for this discovery")
@@ -305,7 +304,7 @@ class ZwaveController(AbstractController):
                     ),
                 }
             )
-            async with self.platform.make_device_repository() as repo:
+            async with self.device_repository() as repo:
                 await repo.save(device)
             log.debug(
                 "[PAIR] node_id=%s mapped schema\n\t%s",
@@ -504,7 +503,7 @@ class ZwaveController(AbstractController):
         return ":".join(f"{i:04x}" for i in ids) if all(i is not None for i in ids) else None
 
     async def _update_device(self, device_id: UUID, **changes: Any) -> None:
-        async with self.platform.make_device_repository() as repo:
+        async with self.device_repository() as repo:
             device = await repo.get(device_id, as_=ZwaveDevice)
             if device is not None and any(getattr(device, k) != v for k, v in changes.items()):
                 await repo.save(device.model_copy(update=changes))

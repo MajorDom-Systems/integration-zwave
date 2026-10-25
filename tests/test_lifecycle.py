@@ -6,7 +6,7 @@ import contextlib
 import aiohttp
 import pytest
 from majordom_integration_sdk.controller import Platform
-from majordom_integration_sdk.testing import RecordingControllerOutput
+from majordom_integration_sdk.testing import RecordingControllerOutput, RecordingPeripheralOutput
 from zwave_js_server.client import Client
 
 from majordom_zwave import ZwaveController
@@ -19,7 +19,8 @@ SWITCH = "37-0-targetValue"
 async def restart(controller: ZwaveController, deps: Platform) -> ZwaveController:
     """Stop and start the integration again, with the Hub's data kept (a Hub restart)."""
     await controller.stop()
-    again = ZwaveController(deps, controller.peripherals)
+    again = ZwaveController(deps)
+    again.peripherals = controller.peripherals
     await again.start()
     return again
 
@@ -103,6 +104,7 @@ async def test_losing_the_server_loses_the_devices_and_it_reconnects_when_back(
 async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
     controller: ZwaveController,
     output: RecordingControllerOutput,
+    runtime: RecordingPeripheralOutput,
     network: MockNetwork,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -115,19 +117,21 @@ async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
     assert not output.errors  # one failed reconnect is no outage yet
     await wait_until(lambda: output.errors, 10, "the lost server to be reported")
     await asyncio.sleep(1.5)  # a few more failed reconnects
-    assert list(output.errors) == ["server-unreachable"] and output.errors["server-unreachable"].is_still_running
+    assert list(output.errors) == ["server-unreachable"]
+    assert not runtime.failed and not runtime.stopped  # it keeps reconnecting
 
     await network.serve()
     await wait_until(lambda: not output.errors, 15, "the reconnection to resolve it")
 
 
 async def test_starting_without_the_server_does_not_fail_and_connects_once_it_is_up(
-    controller: ZwaveController, output: RecordingControllerOutput, make_network
+    controller: ZwaveController, output: RecordingControllerOutput, runtime: RecordingPeripheralOutput, make_network
 ):
     network = await make_network(serve=False)
 
     await controller.start()  # the server is not up yet: reported, not raised
-    assert output.errors["server-unreachable"].is_still_running
+    assert "server-unreachable" in output.errors
+    assert not runtime.failed and not runtime.stopped
 
     await network.serve()
     await wait_until(lambda: controller.connected, 15, "the connection")
@@ -196,7 +200,8 @@ async def test_another_device_reusing_a_node_id_is_not_taken_for_the_paired_one(
     # while the Hub was off, the device was replaced: another product now has node id 5
     await make_network([{"node": 5, "kind": "switch", "productId": 2}])
     output.connected_devices.clear()
-    again = ZwaveController(deps, controller.peripherals)
+    again = ZwaveController(deps)
+    again.peripherals = controller.peripherals
     await again.start()
     try:
         assert device.id not in output.connected_devices

@@ -6,23 +6,20 @@ from typing import Any, cast
 import pytest
 from majordom_integration_sdk import Endpoint, Peripherals
 from majordom_integration_sdk.controller import Platform
-from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
+from majordom_integration_sdk.testing import RecordingControllerOutput, RecordingPeripheralOutput, build_test_platform
 
 from majordom_zwave import ZwaveController
 from tests.network import MockNetwork
 
-INTEGRATION = "ZWave"
-
 
 @pytest.fixture
 def deps() -> Platform:
-    return build_test_platform(integration=INTEGRATION)
+    return build_test_platform()
 
 
 @pytest.fixture
-def peripherals() -> Peripherals:
-    # Kept by the controller, so a network started later can point it at itself.
-    return Peripherals()
+def runtime() -> RecordingPeripheralOutput:
+    return RecordingPeripheralOutput()
 
 
 @pytest.fixture
@@ -47,22 +44,23 @@ def patient(fast: None, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-async def controller(deps: Platform, peripherals: Peripherals, fast: None) -> AsyncIterator[ZwaveController]:
-    controller = ZwaveController(deps, peripherals)
+async def controller(deps: Platform, runtime: RecordingPeripheralOutput, fast: None) -> AsyncIterator[ZwaveController]:
+    controller = ZwaveController(deps)
+    controller.runtime = runtime
     yield controller
     await controller.stop()
 
 
 @pytest.fixture
-async def make_network(peripherals: Peripherals) -> AsyncIterator[Callable[..., Awaitable[MockNetwork]]]:
-    """Start a mock network (with the given nodes already included) and point the integration at it."""
+async def make_network(controller: ZwaveController) -> AsyncIterator[Callable[..., Awaitable[MockNetwork]]]:
+    """Start a mock network (with the given nodes already included) and bind the integration's need to it."""
     networks: list[MockNetwork] = []
 
     async def make(nodes: list[dict[str, Any]] | None = None, serve: bool = True) -> MockNetwork:
         network = MockNetwork(nodes or [])
         networks.append(network)
         await network.start(serve=serve)
-        peripherals["zwave"] = Endpoint("zwave", "zwave-js-ws", network.url)
+        controller.peripherals = Peripherals({"zwave": Endpoint("zwave", "zwave-js-ws", network.url)})
         return network
 
     yield make
