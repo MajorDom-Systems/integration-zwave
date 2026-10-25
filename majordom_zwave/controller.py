@@ -26,7 +26,7 @@ from zwave_js_server.model.controller.inclusion_and_provisioning import Inclusio
 from zwave_js_server.model.node import Node
 from zwave_js_server.model.value import Value
 
-from . import config, mapper
+from . import mapper
 from .model import (
     ZwaveDevice,
     ZwaveDeviceIntegrationData,
@@ -49,7 +49,6 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
 
     needs = [Need("zwave", ["zwave-js-ws"])]
-    services = [config.ZWAVE_JS_SERVER]
 
     name = "ZWave"
 
