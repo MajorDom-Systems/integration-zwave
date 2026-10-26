@@ -661,9 +661,9 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
 
     async def _supported_notification_events(self, node: Node) -> list[dict[str, Any]]:
         """The keypad and Notification CC events the node supports, as zwave-js knows them from its interview."""
-        assert self._zwave_client is not None
+        client = self._controller().client  # raises when the connection is gone
         try:
-            result = await self._zwave_client.async_send_command(
+            result = await client.async_send_command(
                 {"command": "node.get_supported_notification_events", "nodeId": node.node_id}, require_schema=43
             )
         except Exception:  # noqa: BLE001  an older server: no keypad or Notification CC event parameters

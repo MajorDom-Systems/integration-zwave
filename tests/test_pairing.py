@@ -177,6 +177,28 @@ async def test_a_pairing_that_outlives_a_stop_adopts_nothing(
     assert len(changes(output)) == reported
 
 
+async def test_a_pairing_whose_server_is_lost_while_the_hub_reads_says_why(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch")
+    await hub_creates_device(controller.platform, discovery)
+    get = DeviceRepositoryMemory.get
+
+    async def get_while_the_server_drops(self: DeviceRepositoryMemory, device_id: UUID, as_: type[Device] = Device):
+        await network.drop_server()
+        await wait_until(lambda: controller._zwave_client is None, 10, "the connection to be let go")
+        return await get(self, device_id, as_)
+
+    monkeypatch.setattr(DeviceRepositoryMemory, "get", get_while_the_server_drops)
+    with pytest.raises(ConnectionError):
+        await controller.pair_device(discovery, None)
+    assert output.updated_discoveries[-1].last_error
+
+
 async def test_a_pairing_window_opening_across_a_stop_is_refused(
     controller: ZwaveController, network: MockNetwork, monkeypatch: pytest.MonkeyPatch
 ):
