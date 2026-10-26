@@ -20,6 +20,7 @@ from zwave_js_server.const import CommandClass
 from zwave_js_server.model.value import Value, ValueMetadata
 
 from majordom_zwave import ZwaveController, mapper
+from majordom_zwave.model import ZwaveDevice
 from majordom_zwave.zwave_spec import CONVERTED_UNITS, PLAIN_UNITS, UNIT_MAP
 from tests.catalogue import (
     COMMON,
@@ -171,9 +172,10 @@ def test_an_unknown_unit_is_plain_and_logged(caplog: pytest.LogCaptureFixture):
 
 
 @pytest.mark.parametrize("recipe", sorted(RECIPES))
-async def test_every_hosted_command_class_maps_as_expected(
+async def test_every_hosted_command_class_maps_as_expected_and_round_trips_its_values(
     recipe: str, controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
 ):
+    """One test per recipe: pairing it (and starting its network) is most of its cost."""
     await controller.start()
     device = await pair(controller, output, network, 5, recipe)
 
@@ -191,6 +193,7 @@ async def test_every_hosted_command_class_maps_as_expected(
     # the SDK's advisory audit: no over-exposed device screen, no near-duplicate user names
     assert not audit_device_parameters(recipe, device.parameters, ignore_similar_pairs=SIMILAR_NAMES)
     assert_readable(device)
+    await assert_writable_values_round_trip(controller, output, device)
 
 
 @pytest.mark.parametrize("recipe", sorted(VARIANTS))
@@ -243,13 +246,10 @@ def new_value(parameter: Any, current: Any) -> Any:
     return middle if middle != current else middle + 1
 
 
-@pytest.mark.parametrize("recipe", sorted(RECIPES))
-async def test_every_writable_value_round_trips_through_the_device(
-    recipe: str, controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+async def assert_writable_values_round_trip(
+    controller: ZwaveController, output: RecordingControllerOutput, device: ZwaveDevice
 ):
-    await controller.start()
-    device = await pair(controller, output, network, 5, recipe)
-
+    """Every writable value the user sees goes through the device and comes back."""
     for parameter in device.parameters:
         k = key(parameter.integration_data.value_id)
         if parameter.role != ParameterRole.control or parameter.visibility == ParameterVisibility.system:
