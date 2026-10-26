@@ -171,7 +171,7 @@ async def test_the_runtime_starts_again_a_controller_whose_server_doesnt_answer(
     controller: ZwaveController, tmp_path: Path
 ):
     server = Endpoint("zwave", "zwave-js-ws", f"ws://127.0.0.1:{free_port()}")  # nothing listens there
-    runtime = Runtime(tmp_path, [Pinned(server), controller])
+    runtime = Runtime(tmp_path, [Pinned(server), controller], platform=controller.platform)
     await runtime.start()
     try:
         await wait_until(lambda: runtime.status(controller).kind == StatusKind.RETRYING, 10, "the retry")
