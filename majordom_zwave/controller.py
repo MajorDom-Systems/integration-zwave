@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, override
 from uuid import UUID
@@ -67,8 +68,11 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     name = "ZWave"
 
     RECONNECT_DELAYS: ClassVar[tuple[float, ...]] = (1, 2, 5, 10, 30)  # then 30 s between attempts
-    # A lost server is reported after this many failures in a row, the lost connection included
-    REPORT_AFTER_FAILURES: ClassVar[int] = 5
+    # An outage lasts from the lost connection until a new one held as long as the runtime's stable run, so drops in
+    # a row add up (a connection dropped before the driver was ready is a failed attempt); it is reported once it
+    # lasted this long, on each failure from then on
+    REPORT_OUTAGE_AFTER: ClassVar[float] = 15
+    STABLE_CONNECTION: ClassVar[float] = 300
     READY_TIMEOUT: ClassVar[float] = 120  # a device's interview; a sleeping device finishes it when it wakes up
     EXCLUSION_TIMEOUT: ClassVar[float] = 60  # for the user to put the device into exclusion mode
     IDENTIFY_BLINKS: ClassVar[int] = 5
@@ -177,9 +181,11 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
 
     async def _run(self, url: str, session: ClientSession):
         attempt = 0
+        outage_since: float | None = None
         unreachable = f"zwave-js-server at {url} is unreachable"
         while True:
             listening: asyncio.Task | None = None
+            connected_at: float | None = None
             failing = unreachable
             try:
                 client = _Client(url, session)
@@ -196,10 +202,10 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                 failing = "Z-Wave failed to start"  # the server answered: what fails now is the Hub's side
                 await self._attach()
                 log.info(f"[READY] connected to {url}")
-                attempt = 0
                 await self.output.controller_did_resolve_error(self, "server-unreachable")
                 self._first_connection.set()
                 failing = unreachable
+                connected_at = time.monotonic()
                 await listening
                 raise ConnectionError("the connection to zwave-js-server closed")
             except Exception as exc:  # noqa: BLE001  any failure means: reconnect
@@ -207,10 +213,13 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                 if not self._first_connection.is_set():
                     raise ConnectionError(reason) from exc  # start() raises it: the runtime starts it again later
                 log.warning(f"[CONNECT] {reason}")
-                # on each attempt once the outage lasts; the devices show unavailable meanwhile
+                now = time.monotonic()
+                if outage_since is None or (connected_at is not None and now - connected_at >= self.STABLE_CONNECTION):
+                    outage_since, attempt = now, 0  # a new outage
+                # the devices show unavailable meanwhile
                 try:
                     await self._detach(reason)
-                    if attempt + 1 >= self.REPORT_AFTER_FAILURES:
+                    if now - outage_since >= self.REPORT_OUTAGE_AFTER:
                         error = IntegrationError("server-unreachable", reason)
                         await self.output.controller_did_encounter_error(self, error)
                 except Exception:  # noqa: BLE001  the Hub's side failed: reconnect all the same

@@ -8,7 +8,7 @@ from uuid import UUID
 
 import aiohttp
 import pytest
-from majordom_integration_sdk import Endpoint, Platform
+from majordom_integration_sdk import Endpoint, IntegrationError, Platform
 from majordom_integration_sdk.runtime import Pinned, Runtime, StatusKind
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput
@@ -131,13 +131,17 @@ async def test_it_reconnects_though_reporting_the_lost_server_failed(
     await wait_until(lambda: device.id in output.connected_devices, 15, "the reconnection")
 
 
+def reported(output: RecordingControllerOutput) -> list[str]:
+    return [e.id for e in output.error_log if isinstance(e, IntegrationError)]
+
+
 async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
     controller: ZwaveController,
     output: RecordingControllerOutput,
     network: MockNetwork,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(ZwaveController, "REPORT_AFTER_FAILURES", 3)
+    monkeypatch.setattr(ZwaveController, "REPORT_OUTAGE_AFTER", 1.0)
     await controller.start()
     device = await pair(controller, output, network)
 
@@ -150,6 +154,47 @@ async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
 
     await network.serve()
     await wait_until(lambda: not output.errors, 15, "the reconnection to resolve it")
+
+
+async def test_a_server_that_keeps_dropping_the_connection_is_reported(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Each connection holds for a moment only: the drops add up to one outage, until a connection holds."""
+    monkeypatch.setattr(ZwaveController, "REPORT_OUTAGE_AFTER", 1.0)
+    await controller.start()
+
+    for _ in range(6):
+        await network.drop_server()
+        await wait_until(lambda: not controller.connected, 10, "the drop")
+        await network.serve()
+        await wait_until(lambda: controller.connected, 10, "the reconnection")
+
+    assert "server-unreachable" in reported(output)
+
+
+async def test_a_server_lost_long_after_it_came_back_is_a_new_outage(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(ZwaveController, "REPORT_OUTAGE_AFTER", 1.0)
+    monkeypatch.setattr(ZwaveController, "STABLE_CONNECTION", 0.5)
+    await controller.start()
+    await network.drop_server()
+    await wait_until(lambda: not controller.connected, 10, "the drop")
+    await network.serve()
+    await wait_until(lambda: controller.connected, 10, "the reconnection")
+    await asyncio.sleep(1.5)  # held: the outage ended (and began longer ago than its report delay)
+
+    await network.drop_server()
+    await wait_until(lambda: not controller.connected, 10, "the second drop")
+    await asyncio.sleep(0.1)
+
+    assert reported(output) == []  # not yet: this outage only began
 
 
 async def test_starting_without_the_server_fails_and_a_later_start_connects(
