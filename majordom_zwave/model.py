@@ -20,4 +20,4 @@ class ZwaveDevice(Device[ZwaveDeviceIntegrationData | None]):  # None until pair
 
 
 class ZwaveParameter(Parameter[ZwaveParameterIntegrationData]):
-    integration_data: ZwaveParameterIntegrationData
+    pass

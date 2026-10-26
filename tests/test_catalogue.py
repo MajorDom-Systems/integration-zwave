@@ -269,5 +269,5 @@ async def assert_writable_values_round_trip(
             continue
         target = new_value(parameter, reported[-1])
         await command(controller, device, parameter, target)
-        # the device's report, or zwave-js's own check of the value ~5 s after an unsupervised set
+        # the device's report, or zwave-js's own check of the value (`refreshValue`) after an unsupervised set
         await wait_for_value(output, parameter, lambda v, t=target: v == t, timeout=10)
