@@ -164,9 +164,9 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                 waiting.set_exception(ConnectionError("Z-Wave stopped"))
 
     async def _end_inclusion_and_exclusion(self):
-        """Ends the ones this run began, while still connected: zwave-js-server outlives the controller, and would go
-        on including (the next device to join is paired by nobody, the next window doesn't open) or excluding (the
-        next button pressed removes a device)."""
+        """Ends the inclusion or exclusion this run began, while still connected: zwave-js-server outlives the
+        controller, and would go on including (the next device to join is paired by nobody, the next window doesn't
+        open) or excluding (the next button pressed removes a device)."""
         if not self.connected:
             return
         controller = self._controller()
