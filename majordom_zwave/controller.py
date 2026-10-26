@@ -52,7 +52,8 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     name = "ZWave"
 
     RECONNECT_DELAYS: ClassVar[tuple[float, ...]] = (1, 2, 5, 10, 30)  # then 30 s between attempts
-    REPORT_AFTER_FAILURES: ClassVar[int] = 5  # a lost server is reported once it fails this many reconnects in a row
+    # A lost server is reported after this many failures in a row, the lost connection included
+    REPORT_AFTER_FAILURES: ClassVar[int] = 5
     READY_TIMEOUT: ClassVar[float] = 120  # a device's interview; a sleeping device finishes it when it wakes up
     EXCLUSION_TIMEOUT: ClassVar[float] = 60  # for the user to put the device into exclusion mode
     IDENTIFY_BLINKS: ClassVar[int] = 5
@@ -160,8 +161,6 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                 self._first_connection.set()
                 await listening
                 raise ConnectionError("the connection to zwave-js-server closed")
-            except asyncio.CancelledError:
-                raise
             except Exception as exc:  # noqa: BLE001  any failure means: reconnect
                 reason = f"zwave-js-server at {url} is unreachable: {exc or type(exc).__name__}"
                 if not self._first_connection.is_set():
