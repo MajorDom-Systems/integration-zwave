@@ -25,6 +25,14 @@ def test_the_generated_network_keys_are_valid():
     assert ZwaveNetwork.model_validate(keys).model_dump() == keys
 
 
+def test_the_network_keys_are_write_only():
+    """The Hub never reads a write-only field back through its API: with the keys, anyone could decrypt and forge the
+    network's secure traffic."""
+    fields = ZwaveNetwork.model_json_schema()["properties"]
+    assert fields
+    assert [name for name, field in fields.items() if not field.get("writeOnly")] == []
+
+
 @pytest.mark.parametrize(("region", "rendered"), [("Europe", "Europe"), (None, "")])  # none: the stick keeps its own
 async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(
     tmp_path: Path, region: str | None, rendered: str

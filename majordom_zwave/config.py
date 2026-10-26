@@ -2,6 +2,7 @@
 
 import secrets
 from pathlib import Path
+from typing import Any
 
 from majordom_integration_sdk import Endpoint, Need, Service
 from pydantic import BaseModel, Field
@@ -13,16 +14,21 @@ def _key() -> str:
     return secrets.token_hex(16).upper()
 
 
+def _key_field(title: str) -> Any:
+    """Generated once; write-only: the Hub never reads it back through its API, and a change without it keeps it."""
+    return Field(default_factory=_key, title=title, pattern=KEY, json_schema_extra={"writeOnly": True})
+
+
 class ZwaveNetwork(BaseModel):
     """Security keys of the Z-Wave network, generated once. Back them up: without them, securely
     included devices have to be re-included on a new controller."""
 
-    s0_legacy: str = Field(default_factory=_key, title="S0 Legacy key", pattern=KEY)
-    s2_unauthenticated: str = Field(default_factory=_key, title="S2 Unauthenticated key", pattern=KEY)
-    s2_authenticated: str = Field(default_factory=_key, title="S2 Authenticated key", pattern=KEY)
-    s2_access_control: str = Field(default_factory=_key, title="S2 Access Control key", pattern=KEY)
-    lr_s2_authenticated: str = Field(default_factory=_key, title="Long Range S2 Authenticated key", pattern=KEY)
-    lr_s2_access_control: str = Field(default_factory=_key, title="Long Range S2 Access Control key", pattern=KEY)
+    s0_legacy: str = _key_field("S0 Legacy key")
+    s2_unauthenticated: str = _key_field("S2 Unauthenticated key")
+    s2_authenticated: str = _key_field("S2 Authenticated key")
+    s2_access_control: str = _key_field("S2 Access Control key")
+    lr_s2_authenticated: str = _key_field("Long Range S2 Authenticated key")
+    lr_s2_access_control: str = _key_field("Long Range S2 Access Control key")
 
 
 def zwave_js_server() -> Service[ZwaveNetwork]:
