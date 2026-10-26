@@ -39,6 +39,7 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
     "pytest-timeout",
+    "pytest-xdist",   # parallel tests: `-n auto`; every mock network is a process of its own
     "pytest-repeat",
     "pytest-benchmark",
     "pytest-profiling",
@@ -113,7 +114,7 @@ echo "\nRunning ty:"
 poetry run ty check || code=1
 
 echo "\nRunning pytest:"
-poetry run pytest --cov=majordom_zwave --cov-report=xml || code=1
+poetry run pytest -n auto --cov=majordom_zwave --cov-report=xml || code=1
 
 echo "\nRunning poetry build:"
 poetry build || code=1

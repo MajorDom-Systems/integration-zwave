@@ -42,4 +42,4 @@ jobs:
           poetry run pip show zwave-js-server-python | head -2
 
       - name: Whole suite, catalogue included
-        run: poetry run pytest -v
+        run: poetry run pytest -v -n auto
