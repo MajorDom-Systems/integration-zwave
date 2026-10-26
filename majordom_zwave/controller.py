@@ -120,12 +120,14 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         await asyncio.gather(*[t for t in [self._supervisor, *self._tasks] if t is not None], return_exceptions=True)
         self._supervisor = None
         self._tasks.clear()
-        await self._disconnect()
+        self._credentials = None
+        if self._removal is not None and not self._removal.done():
+            self._removal.set_exception(ConnectionError("Z-Wave stopped before the device left the network"))
+        await self._release()
         if self._session is not None:
             await self._session.close()
             self._session = None
         self._discoveries.clear()
-        self._joined.clear()
         self._available.clear()
 
     async def _run(self, url: str, session: ClientSession):
@@ -219,9 +221,15 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                 await self._offer(node)
 
     async def _detach(self, reason: str):
+        devices = list(self._nodes)
+        await self._release()
+        for device_id in devices:
+            await self._set_available(device_id, False, reason)
+
+    async def _release(self):
+        """Lets go of the connection and everything bound to it, silently."""
         for device_id in list(self._nodes):
             self._unbind(device_id)
-            await self._set_available(device_id, False, reason)
         for unsubscribe in self._listeners:
             unsubscribe()
         self._listeners.clear()

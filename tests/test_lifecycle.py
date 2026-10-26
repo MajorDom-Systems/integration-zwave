@@ -6,6 +6,7 @@ import contextlib
 import aiohttp
 import pytest
 from majordom_integration_sdk import Platform
+from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput
 from zwave_js_server.client import Client
 
@@ -140,6 +141,26 @@ async def test_stop_is_clean_without_a_connection(controller: ZwaveController, m
     await controller.start()
     await controller.stop()
     await controller.stop()
+
+
+async def test_the_same_controller_started_again_keeps_nothing_of_its_last_run(
+    controller: ZwaveController, output: RecordingControllerOutput, make_network: MakeNetwork
+):
+    """The runtime starts the instance it stopped (a retry, a moved need), here on another stick without the device."""
+    network = await make_network()
+    await controller.start()
+    device = await pair(controller, output, network)
+    await controller.start_pairing_window(60, ProvidedCredentials(type=CredentialsType.code, value="12345"))
+    await controller.stop()
+
+    await make_network()
+    await controller.start()
+
+    # zwave-js-server asks every client for the PIN of an inclusion no client started: an old one would answer it
+    assert controller._credentials is None
+    with pytest.raises(ConnectionError):
+        await controller.fetch(device)
+    await asyncio.wait_for(controller.unpair(device), 1)  # gone: nothing to exclude
 
 
 async def test_a_device_excluded_elsewhere_is_lost_with_a_reason(
