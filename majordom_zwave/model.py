@@ -1,5 +1,5 @@
 from majordom_integration_sdk.schemas import Device, Parameter
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class ZwaveDeviceIntegrationData(BaseModel):
@@ -15,14 +15,8 @@ class ZwaveParameterIntegrationData(BaseModel):
     state_value_id: str | None = None  # the value the state is read from, when it is another one (current vs target)
 
 
-class ZwaveDevice(Device[ZwaveDeviceIntegrationData | None]):
-    integration_data: ZwaveDeviceIntegrationData | None = None  # None until paired: the Hub creates the device first
+class ZwaveDevice(Device[ZwaveDeviceIntegrationData | None]):  # None until paired: the Hub creates the device first
     parameters: list["ZwaveParameter"] = Field(default_factory=list)
-
-    @field_validator("integration_data", mode="before")
-    @classmethod
-    def _empty_is_unpaired(cls, value: object) -> object:
-        return value or None  # the device the Hub creates before pairing carries `{}`
 
 
 class ZwaveParameter(Parameter[ZwaveParameterIntegrationData]):
