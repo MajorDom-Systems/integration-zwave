@@ -158,12 +158,16 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
             except Exception as exc:  # noqa: BLE001  any failure means: reconnect
                 reason = f"zwave-js-server at {url} is unreachable: {exc or type(exc).__name__}"
                 log.warning(f"[CONNECT] {reason}")
-                await self._detach(reason)
+                is_first = not self._first_attempt.is_set()
+                self._first_attempt.set()
                 # at the first attempt, then on each one once the outage lasts; the devices show unavailable meanwhile
-                if not self._first_attempt.is_set() or attempt + 1 >= self.REPORT_AFTER_FAILURES:
-                    error = IntegrationError("server-unreachable", reason)
-                    await self.output.controller_did_encounter_error(self, error)
-                    self._first_attempt.set()
+                try:
+                    await self._detach(reason)
+                    if is_first or attempt + 1 >= self.REPORT_AFTER_FAILURES:
+                        error = IntegrationError("server-unreachable", reason)
+                        await self.output.controller_did_encounter_error(self, error)
+                except Exception:  # noqa: BLE001  the Hub's side failed: reconnect all the same
+                    log.exception("[CONNECT] reporting the lost server failed")
             finally:
                 if listening is not None:
                     listening.cancel()

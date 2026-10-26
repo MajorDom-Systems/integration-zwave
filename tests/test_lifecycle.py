@@ -2,6 +2,8 @@
 
 import asyncio
 import contextlib
+import sqlite3
+from uuid import UUID
 
 import aiohttp
 import pytest
@@ -100,6 +102,31 @@ async def test_losing_the_server_loses_the_devices_and_it_reconnects_when_back(
     await wait_until(lambda: device.id in output.connected_devices, 15, "the reconnection")
     await network.report(5, "switch", True)
     assert await wait_for_value(output, param(device, SWITCH), lambda v: v is True)
+
+
+async def test_it_reconnects_though_reporting_the_lost_server_failed(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    await controller.start()
+    device = await pair(controller, output, network)
+    lose_device = output.controller_did_lose_device
+    failures = [sqlite3.OperationalError("database is locked")]  # the Hub's store, busy once
+
+    async def busy_once(controller: ZwaveController, device_id: UUID):
+        if failures:
+            raise failures.pop()
+        await lose_device(controller, device_id)
+
+    monkeypatch.setattr(output, "controller_did_lose_device", busy_once)
+    await network.drop_server()
+    await wait_until(lambda: not controller.connected, 10, "the server to be lost")
+
+    output.connected_devices.clear()
+    await network.serve()
+    await wait_until(lambda: device.id in output.connected_devices, 15, "the reconnection")
 
 
 async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
