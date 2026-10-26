@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from majordom_integration_sdk import Endpoint
-from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime
+from majordom_integration_sdk.runtime import Pinned, Runtime, StatusKind
 from majordom_integration_sdk.testing import FakeCompose, build_test_platform
 
 import majordom_zwave
@@ -38,7 +38,8 @@ async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(tmp_path:
     runtime = Runtime(tmp_path, [Pinned(stick), FakeCompose(), *exported], platform=platform)
     await runtime.start()
     try:
-        await wait_until(lambda: runtime.status(controller).state == PeripheralState.RUNNING, 10, "the controller")
+        # started once the server runs; FakeCompose runs none, so it fails to connect and is started again later
+        await wait_until(lambda: runtime.status(controller).kind == StatusKind.RETRYING, 10, "the controller's start")
         assert runtime.providers(controller) == {"zwave": "zwave-js-server"}
         compose = json.loads((tmp_path / "peripherals" / "compose" / "compose.json").read_text())
         container = compose["services"]["zwave-js-server"]

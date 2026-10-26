@@ -66,7 +66,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         self._session: ClientSession | None = None
         self._zwave_client: ZwaveClient | None = None
         self._supervisor: asyncio.Task | None = None
-        self._first_attempt = asyncio.Event()
+        self._first_connection = asyncio.Event()
         self._tasks: set[asyncio.Task] = set()
         self._discoveries: dict[UUID, Discovery] = {}
         self._joined: dict[UUID, Node] = {}  # nodes behind the discoveries
@@ -107,11 +107,18 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     # -------------------------------------------------------------------------
 
     async def start(self):
-        """Connects to zwave-js-server and keeps reconnecting; an unreachable server is reported, not raised."""
+        """Connects to zwave-js-server, and raises when it can't; a connection lost later is reconnected."""
         self._session = ClientSession()
-        self._first_attempt.clear()
-        self._supervisor = asyncio.create_task(self._run(self.peripherals.endpoint("zwave").url, self._session))
-        await self._first_attempt.wait()
+        self._first_connection.clear()
+        url = self.peripherals.endpoint("zwave").url
+        supervisor = self._supervisor = asyncio.create_task(self._run(url, self._session))
+        connected = asyncio.create_task(self._first_connection.wait())
+        try:
+            await asyncio.wait({supervisor, connected}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            connected.cancel()
+        if supervisor.done():
+            supervisor.result()  # raises why it couldn't connect
 
     async def stop(self):
         for task in [self._supervisor, *self._tasks]:
@@ -150,20 +157,20 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                 log.info(f"[READY] connected to {url}")
                 attempt = 0
                 await self.output.controller_did_resolve_error(self, "server-unreachable")
-                self._first_attempt.set()
+                self._first_connection.set()
                 await listening
                 raise ConnectionError("the connection to zwave-js-server closed")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001  any failure means: reconnect
                 reason = f"zwave-js-server at {url} is unreachable: {exc or type(exc).__name__}"
+                if not self._first_connection.is_set():
+                    raise ConnectionError(reason) from exc  # start() raises it: the runtime starts it again later
                 log.warning(f"[CONNECT] {reason}")
-                is_first = not self._first_attempt.is_set()
-                self._first_attempt.set()
-                # at the first attempt, then on each one once the outage lasts; the devices show unavailable meanwhile
+                # on each attempt once the outage lasts; the devices show unavailable meanwhile
                 try:
                     await self._detach(reason)
-                    if is_first or attempt + 1 >= self.REPORT_AFTER_FAILURES:
+                    if attempt + 1 >= self.REPORT_AFTER_FAILURES:
                         error = IntegrationError("server-unreachable", reason)
                         await self.output.controller_did_encounter_error(self, error)
                 except Exception:  # noqa: BLE001  the Hub's side failed: reconnect all the same

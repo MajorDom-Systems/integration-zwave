@@ -3,18 +3,20 @@
 import asyncio
 import contextlib
 import sqlite3
+from pathlib import Path
 from uuid import UUID
 
 import aiohttp
 import pytest
-from majordom_integration_sdk import Platform
+from majordom_integration_sdk import Endpoint, Platform
+from majordom_integration_sdk.runtime import Pinned, Runtime, StatusKind
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput
 from zwave_js_server.client import Client
 
 from majordom_zwave import ZwaveController
 from tests.helpers import command, pair, param, stored, wait_for_value, wait_until
-from tests.network import MakeNetwork, MockNetwork
+from tests.network import MakeNetwork, MockNetwork, free_port
 
 SWITCH = "37-0-targetValue"
 
@@ -150,22 +152,38 @@ async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
     await wait_until(lambda: not output.errors, 15, "the reconnection to resolve it")
 
 
-async def test_starting_without_the_server_does_not_fail_and_connects_once_it_is_up(
+async def test_starting_without_the_server_fails_and_a_later_start_connects(
     controller: ZwaveController, output: RecordingControllerOutput, make_network: MakeNetwork
 ):
     network = await make_network(serve=False)
 
-    await controller.start()  # the server is not up yet: reported, not raised
-    assert "server-unreachable" in output.errors
+    with pytest.raises(ConnectionError, match="unreachable"):
+        await controller.start()
+    assert not output.errors  # the runtime says why it failed, and starts it again later
+    await controller.stop()  # as the runtime does after a failed start
 
     await network.serve()
-    await wait_until(lambda: controller.connected, 15, "the connection")
-    await wait_until(lambda: not output.errors, 5, "the connection to resolve it")
+    await controller.start()
+    assert controller.connected
+
+
+async def test_the_runtime_starts_again_a_controller_whose_server_doesnt_answer(
+    controller: ZwaveController, tmp_path: Path
+):
+    server = Endpoint("zwave", "zwave-js-ws", f"ws://127.0.0.1:{free_port()}")  # nothing listens there
+    runtime = Runtime(tmp_path, [Pinned(server), controller])
+    await runtime.start()
+    try:
+        await wait_until(lambda: runtime.status(controller).kind == StatusKind.RETRYING, 10, "the retry")
+        assert "unreachable" in runtime.status(controller).detail
+    finally:
+        await runtime.stop()
 
 
 async def test_stop_is_clean_without_a_connection(controller: ZwaveController, make_network: MakeNetwork):
     await make_network(serve=False)
-    await controller.start()
+    with pytest.raises(ConnectionError):
+        await controller.start()
     await controller.stop()
     await controller.stop()
 
