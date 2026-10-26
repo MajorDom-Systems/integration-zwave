@@ -164,6 +164,8 @@ class Network {
 				: { enabled: false },
 			securityKeys,
 			storage: { cacheDir: this.cacheDir, lockDir: path.join(this.cacheDir, "locks") },
+			// the mock answers at once: no need to wait seconds for a report, or to re-read a value after a set
+			timeouts: { refreshValue: 500, refreshValueAfterTransition: 100, report: 500 },
 			testingHooks: { skipFirmwareIdentification: true },
 		});
 		this.driver = driver;
