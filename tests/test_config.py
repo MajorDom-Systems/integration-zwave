@@ -3,7 +3,6 @@ to choose: the compose and the endpoint follow it."""
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from majordom_integration_sdk import Endpoint
@@ -12,23 +11,8 @@ from majordom_integration_sdk.testing import FakeCompose, build_test_platform
 
 import majordom_zwave
 from majordom_zwave import ZwaveController
-from majordom_zwave.config import ZwaveNetwork, zwave_js_server
+from majordom_zwave.config import ZwaveNetwork
 from tests.helpers import wait_until
-
-PORTS = SimpleNamespace(api=45813)
-
-
-def test_prefers_its_usual_port():
-    assert zwave_js_server().ports == {"api": 3000}
-
-
-def test_listens_on_the_allocated_port():
-    command = [part.format(ports=PORTS) for part in zwave_js_server().compose["command"]]
-    assert command[command.index("--port") + 1] == "45813"
-
-
-def test_provides_its_url_on_the_allocated_port():
-    assert zwave_js_server().provides[0].url.format(ports=PORTS) == "ws://127.0.0.1:45813"
 
 
 def test_a_malformed_network_key_is_refused():
@@ -41,8 +25,11 @@ def test_the_generated_network_keys_are_valid():
     assert ZwaveNetwork.model_validate(keys).model_dump() == keys
 
 
-async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(tmp_path: Path):
-    platform = build_test_platform(tmp_path / "peripherals", region="Europe")
+@pytest.mark.parametrize(("region", "rendered"), [("Europe", "Europe"), (None, "")])  # none: the stick keeps its own
+async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(
+    tmp_path: Path, region: str | None, rendered: str
+):
+    platform = build_test_platform(tmp_path / "peripherals", region=region)
     stick = Endpoint("zwave", "serial-api", "/dev/serial/by-id/usb-0658_0200-if00")
     exported = majordom_zwave.peripherals(platform)
     [controller] = [peripheral for peripheral in exported if isinstance(peripheral, ZwaveController)]
@@ -55,6 +42,8 @@ async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(tmp_path:
         compose = json.loads((tmp_path / "peripherals" / "compose" / "compose.json").read_text())
         container = compose["services"]["zwave-js-server"]
         assert container["devices"] == [f"{stick.url}:/dev/zwave"]
-        assert container["environment"]["RF_REGION"] == "Europe"
+        assert container["environment"]["RF_REGION"] == rendered
+        port = container["command"][container["command"].index("--port") + 1]
+        assert controller.peripherals.endpoint("zwave").url == f"ws://127.0.0.1:{port}"
     finally:
         await runtime.stop()
