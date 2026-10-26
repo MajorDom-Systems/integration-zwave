@@ -7,7 +7,7 @@ from typing import Any, ClassVar, override
 from uuid import UUID
 
 from aiohttp import ClientSession
-from majordom_integration_sdk import AbstractController, IntegrationError, Need, NoSettings, Platform
+from majordom_integration_sdk import STABLE_RUN, AbstractController, IntegrationError, Need, NoSettings, Platform
 from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
@@ -72,7 +72,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     # a row add up (a connection dropped before the driver was ready is a failed attempt); it is reported once it
     # lasted this long, on each failure from then on
     REPORT_OUTAGE_AFTER: ClassVar[float] = 15
-    STABLE_CONNECTION: ClassVar[float] = 300
+    STABLE_CONNECTION: ClassVar[float] = STABLE_RUN
     READY_TIMEOUT: ClassVar[float] = 120  # a device's interview; a sleeping device finishes it when it wakes up
     EXCLUSION_TIMEOUT: ClassVar[float] = 60  # for the user to put the device into exclusion mode
     IDENTIFY_BLINKS: ClassVar[int] = 5
