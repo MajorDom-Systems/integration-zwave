@@ -177,8 +177,10 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
 
     async def _run(self, url: str, session: ClientSession):
         attempt = 0
+        unreachable = f"zwave-js-server at {url} is unreachable"
         while True:
             listening: asyncio.Task | None = None
+            failing = unreachable
             try:
                 client = _Client(url, session)
                 await client.connect()
@@ -191,15 +193,17 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                     listening.result()  # raises what made it stop
                     raise ConnectionError("the connection closed before the driver was ready")
                 self._zwave_client = client
+                failing = "Z-Wave failed to start"  # the server answered: what fails now is the Hub's side
                 await self._attach()
                 log.info(f"[READY] connected to {url}")
                 attempt = 0
                 await self.output.controller_did_resolve_error(self, "server-unreachable")
                 self._first_connection.set()
+                failing = unreachable
                 await listening
                 raise ConnectionError("the connection to zwave-js-server closed")
             except Exception as exc:  # noqa: BLE001  any failure means: reconnect
-                reason = f"zwave-js-server at {url} is unreachable: {exc or type(exc).__name__}"
+                reason = f"{failing}: {exc or type(exc).__name__}"
                 if not self._first_connection.is_set():
                     raise ConnectionError(reason) from exc  # start() raises it: the runtime starts it again later
                 log.warning(f"[CONNECT] {reason}")

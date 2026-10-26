@@ -167,6 +167,21 @@ async def test_starting_without_the_server_fails_and_a_later_start_connects(
     assert controller.connected
 
 
+async def test_a_start_the_hub_cut_short_doesnt_blame_the_server(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def busy(controller: ZwaveController, error_id: str):
+        raise sqlite3.OperationalError("database is locked")  # the Hub's store
+
+    monkeypatch.setattr(output, "controller_did_resolve_error", busy)
+
+    with pytest.raises(ConnectionError, match="^Z-Wave failed to start: database is locked$"):
+        await controller.start()
+
+
 async def test_the_runtime_starts_again_a_controller_whose_server_doesnt_answer(
     controller: ZwaveController, tmp_path: Path
 ):
