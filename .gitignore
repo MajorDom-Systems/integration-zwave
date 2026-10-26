@@ -39,6 +39,8 @@ venv/
 # Tools
 .ruff_cache/
 .ropeproject
+# the dev runner's settings and network keys
+.majordom-dev/
 
 # mkdocs (only relevant if you kept mkdocs.yml + docs/)
 /site
