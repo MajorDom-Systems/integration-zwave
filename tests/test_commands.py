@@ -99,7 +99,10 @@ async def test_a_read_only_parameter_cannot_be_commanded(
 
 
 async def test_a_secure_device_that_ignored_a_command_gets_a_fresh_session_and_the_command_again(
-    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork, monkeypatch
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """A device that lost power can keep a dead S2 session and never ask for a new one (seen on a Shelly Wave): it
     takes commands without acting on them. A nonce from the controller starts a new session."""

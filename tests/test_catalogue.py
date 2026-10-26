@@ -216,7 +216,7 @@ async def test_every_variant_maps_by_its_rules(
     assert_readable(device)
 
 
-def assert_readable(device: Any) -> None:
+def assert_readable(device: Any):
     """Names and enum labels are for people: unique, without zwave-js's protocol wording, words not camelCase."""
     names = Counter(p.name for p in device.parameters)
     assert not [n for n, count in names.items() if count > 1], f"parameters share a name: {names}"

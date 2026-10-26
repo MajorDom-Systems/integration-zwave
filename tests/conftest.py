@@ -1,6 +1,6 @@
 """Shared fixtures: a fresh controller and Hub doubles per test, and the mock Z-Wave network it connects to."""
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -8,7 +8,7 @@ from majordom_integration_sdk import Endpoint, Peripherals, Platform
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 
 from majordom_zwave import ZwaveController
-from tests.network import MockNetwork
+from tests.network import MakeNetwork, MockNetwork
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def output() -> RecordingControllerOutput:
 
 
 @pytest.fixture
-def fast(monkeypatch: pytest.MonkeyPatch) -> None:
+def fast(monkeypatch: pytest.MonkeyPatch):
     """Shorten the waits meant for people and radios, so failure paths run in seconds."""
     monkeypatch.setattr(ZwaveController, "RECONNECT_DELAYS", (0.2, 0.5))
     monkeypatch.setattr(ZwaveController, "EXCLUSION_TIMEOUT", 2.0)
@@ -32,7 +32,7 @@ def fast(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def patient(fast: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def patient(fast: None, monkeypatch: pytest.MonkeyPatch):
     """Interviewing every capability of a CC takes the mock a few seconds (Notification, User Code)."""
     monkeypatch.setattr(ZwaveController, "READY_TIMEOUT", 90.0)
 
@@ -48,7 +48,7 @@ async def controller(
 
 
 @pytest.fixture
-async def make_network(controller: ZwaveController) -> AsyncIterator[Callable[..., Awaitable[MockNetwork]]]:
+async def make_network(controller: ZwaveController) -> AsyncIterator[MakeNetwork]:
     """Start a mock network (with the given nodes already included) and bind the integration's need to it."""
     networks: list[MockNetwork] = []
 
@@ -65,6 +65,6 @@ async def make_network(controller: ZwaveController) -> AsyncIterator[Callable[..
 
 
 @pytest.fixture
-async def network(make_network: Callable[..., Awaitable[MockNetwork]]) -> MockNetwork:
+async def network(make_network: MakeNetwork) -> MockNetwork:
     """An empty network: devices join it during the test."""
     return await make_network()

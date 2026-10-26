@@ -20,7 +20,7 @@ from tests.network import MockNetwork
 ROOM = UUID(int=42)
 
 
-async def wait_until(predicate: Callable[[], Any], timeout: float = 10.0, message: str = "condition") -> None:
+async def wait_until(predicate: Callable[[], Any], timeout: float = 10.0, message: str = "condition"):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -29,7 +29,7 @@ async def wait_until(predicate: Callable[[], Any], timeout: float = 10.0, messag
     raise TimeoutError(f"timed out after {timeout}s waiting for {message}")
 
 
-async def hub_creates_device(platform: Platform, discovery: Discovery, name: str = "Hall lamp") -> None:
+async def hub_creates_device(platform: Platform, discovery: Discovery, name: str = "Hall lamp"):
     """The Hub creates the device (name, room) before it asks to pair it (`DeviceProvider.create_device`)."""
     async with platform.make_device_repository(discovery.integration) as repo:
         await repo.save(
@@ -115,7 +115,7 @@ async def wait_for_value(
     return next(v for v in reversed(values(output, parameter.id)) if predicate(v))
 
 
-async def command(controller: ZwaveController, device: ZwaveDevice, parameter: ZwaveParameter, value: Any) -> None:
+async def command(controller: ZwaveController, device: ZwaveDevice, parameter: ZwaveParameter, value: Any):
     await controller.send_command(
         DeviceCommand(device_id=device.id, parameter_id=parameter.id, value=value), device, parameter
     )
@@ -130,7 +130,7 @@ PYTHON_TYPES: dict[ParameterDataType, tuple[type, ...]] = {
 }
 
 
-def assert_values_match_parameters(output: RecordingControllerOutput, device: ZwaveDevice) -> None:
+def assert_values_match_parameters(output: RecordingControllerOutput, device: ZwaveDevice):
     """Every reported value has the type its parameter declares, and lies within its limits."""
     by_id = {p.id: p for p in device.parameters}
     for change in changes(output):

@@ -11,7 +11,7 @@ from zwave_js_server.client import Client
 
 from majordom_zwave import ZwaveController
 from tests.helpers import command, pair, param, stored, wait_for_value, wait_until
-from tests.network import MockNetwork
+from tests.network import MakeNetwork, MockNetwork
 
 SWITCH = "37-0-targetValue"
 
@@ -123,7 +123,7 @@ async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
 
 
 async def test_starting_without_the_server_does_not_fail_and_connects_once_it_is_up(
-    controller: ZwaveController, output: RecordingControllerOutput, make_network
+    controller: ZwaveController, output: RecordingControllerOutput, make_network: MakeNetwork
 ):
     network = await make_network(serve=False)
 
@@ -135,7 +135,7 @@ async def test_starting_without_the_server_does_not_fail_and_connects_once_it_is
     await wait_until(lambda: not output.errors, 5, "the connection to resolve it")
 
 
-async def test_stop_is_clean_without_a_connection(controller: ZwaveController, make_network):
+async def test_stop_is_clean_without_a_connection(controller: ZwaveController, make_network: MakeNetwork):
     await make_network(serve=False)
     await controller.start()
     await controller.stop()
@@ -186,7 +186,7 @@ async def test_a_dead_device_that_then_leaves_says_it_left(
 
 
 async def test_another_device_reusing_a_node_id_is_not_taken_for_the_paired_one(
-    controller: ZwaveController, platform: Platform, output: RecordingControllerOutput, make_network
+    controller: ZwaveController, platform: Platform, output: RecordingControllerOutput, make_network: MakeNetwork
 ):
     network = await make_network()
     await controller.start()

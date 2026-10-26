@@ -211,7 +211,7 @@ def data_type(value: Value) -> ParameterDataType:
     metadata = value.metadata
     kind = metadata.type
     if kind not in KNOWN_VALUE_TYPES:
-        log.warning("[MAP] %s has the unknown value type %r: hidden as data", value.value_id, kind)
+        log.warning(f"[MAP] {value.value_id} has the unknown value type {kind!r}: hidden as data")
         return ParameterDataType.data
     if _is_button(value):
         return ParameterDataType.none
@@ -295,7 +295,7 @@ def unit(value: Value) -> ParameterUnit:
     if raw in CONVERTED_UNITS:
         return CONVERTED_UNITS[raw][0]
     if raw and raw not in UNIT_MAP and raw not in PLAIN_UNITS:
-        log.warning("[MAP] %s has the unknown unit %r: reported as plain", value.value_id, raw)
+        log.warning(f"[MAP] {value.value_id} has the unknown unit {raw!r}: reported as plain")
     return UNIT_MAP.get(raw, ParameterUnit.plain)
 
 
