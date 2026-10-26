@@ -293,6 +293,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
 
     async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None):
         controller = self._controller()
+        connection = self._zwave_client  # the run token: a window opened across a stop gets no closing task
         kind = credentials.type if credentials else CredentialsType.none
         value = (credentials.value if credentials else None) or ""
         if kind == CredentialsType.secret:
@@ -320,6 +321,8 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         except Exception:
             self._credentials = None
             raise
+        if self._zwave_client is not connection:  # stop() ended the inclusion meanwhile
+            raise ConnectionError("Z-Wave stopped while opening the pairing window")
         log.debug(f"[PAIRING] inclusion window opened for {duration_sec}s ({kind})")
         if self._closing_window is not None:
             self._closing_window.cancel()
@@ -330,6 +333,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         node = self._joined.get(discovery.id)
         if known is None or node is None:
             raise ValueError("Unknown device: it is no longer discovered")
+        connection = self._zwave_client  # the run token: the node is this connection's
         try:
             if credentials is not None and credentials.type != CredentialsType.none:
                 raise ValueError("Z-Wave credentials are given when opening the pairing window")
@@ -364,6 +368,10 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
             )
             async with self.platform.device_repository(self) as repo:
                 await repo.save(device)
+            if self._zwave_client is not connection:
+                # Stopped, restarted or reconnected meanwhile: refused, the Hub deletes the device it created, and the
+                # next connection offers the node again. Adopting it on the new connection may come later
+                raise ConnectionError("Z-Wave stopped or lost zwave-js-server while pairing: pair the device again")
             schema = "\n\t".join(
                 f"{p.role:8} {p.visibility:8} {p.data_type:8} {p.name} ({p.integration_data.value_id})"
                 for p in parameters
