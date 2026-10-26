@@ -6,6 +6,8 @@ from pathlib import Path
 from majordom_integration_sdk import Endpoint, Need, Service
 from pydantic import BaseModel, Field
 
+KEY = r"^[0-9A-Fa-f]{32}$"  # 16 bytes in hex: zwave-js-server exits on any other key
+
 
 def _key() -> str:
     return secrets.token_hex(16).upper()
@@ -15,12 +17,12 @@ class ZwaveNetwork(BaseModel):
     """Security keys of the Z-Wave network, generated once. Back them up: without them, securely
     included devices have to be re-included on a new controller."""
 
-    s0_legacy: str = Field(default_factory=_key, title="S0 Legacy key")
-    s2_unauthenticated: str = Field(default_factory=_key, title="S2 Unauthenticated key")
-    s2_authenticated: str = Field(default_factory=_key, title="S2 Authenticated key")
-    s2_access_control: str = Field(default_factory=_key, title="S2 Access Control key")
-    lr_s2_authenticated: str = Field(default_factory=_key, title="Long Range S2 Authenticated key")
-    lr_s2_access_control: str = Field(default_factory=_key, title="Long Range S2 Access Control key")
+    s0_legacy: str = Field(default_factory=_key, title="S0 Legacy key", pattern=KEY)
+    s2_unauthenticated: str = Field(default_factory=_key, title="S2 Unauthenticated key", pattern=KEY)
+    s2_authenticated: str = Field(default_factory=_key, title="S2 Authenticated key", pattern=KEY)
+    s2_access_control: str = Field(default_factory=_key, title="S2 Access Control key", pattern=KEY)
+    lr_s2_authenticated: str = Field(default_factory=_key, title="Long Range S2 Authenticated key", pattern=KEY)
+    lr_s2_access_control: str = Field(default_factory=_key, title="Long Range S2 Access Control key", pattern=KEY)
 
 
 def zwave_js_server() -> Service[ZwaveNetwork]:

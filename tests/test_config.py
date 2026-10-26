@@ -5,13 +5,14 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from majordom_integration_sdk import Endpoint
 from majordom_integration_sdk.runtime import Pinned, Runtime, StatusKind
 from majordom_integration_sdk.testing import FakeCompose, build_test_platform
 
 import majordom_zwave
 from majordom_zwave import ZwaveController
-from majordom_zwave.config import zwave_js_server
+from majordom_zwave.config import ZwaveNetwork, zwave_js_server
 from tests.helpers import wait_until
 
 PORTS = SimpleNamespace(api=45813)
@@ -28,6 +29,16 @@ def test_listens_on_the_allocated_port():
 
 def test_provides_its_url_on_the_allocated_port():
     assert zwave_js_server().provides[0].url.format(ports=PORTS) == "ws://127.0.0.1:45813"
+
+
+def test_a_malformed_network_key_is_refused():
+    with pytest.raises(ValueError, match="pattern"):  # zwave-js-server would exit on it, again and again
+        ZwaveNetwork(s2_authenticated="not a key")
+
+
+def test_the_generated_network_keys_are_valid():
+    keys = ZwaveNetwork().model_dump()
+    assert ZwaveNetwork.model_validate(keys).model_dump() == keys
 
 
 async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(tmp_path: Path):
