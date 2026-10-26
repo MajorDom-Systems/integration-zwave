@@ -1,30 +1,24 @@
 """Shared fixtures: a fresh controller and Hub doubles per test, and the mock Z-Wave network it connects to."""
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 import pytest
-from majordom_integration_sdk import Endpoint, Peripherals
-from majordom_integration_sdk.controller import Platform
-from majordom_integration_sdk.testing import RecordingControllerOutput, RecordingPeripheralOutput, build_test_platform
+from majordom_integration_sdk import Endpoint, Peripherals, Platform
+from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 
 from majordom_zwave import ZwaveController
 from tests.network import MockNetwork
 
 
 @pytest.fixture
-def deps() -> Platform:
+def platform() -> Platform:
     return build_test_platform()
 
 
 @pytest.fixture
-def runtime() -> RecordingPeripheralOutput:
-    return RecordingPeripheralOutput()
-
-
-@pytest.fixture
-def output(deps: Platform) -> RecordingControllerOutput:
-    return cast(RecordingControllerOutput, deps.output)
+def output() -> RecordingControllerOutput:
+    return RecordingControllerOutput()
 
 
 @pytest.fixture
@@ -44,9 +38,11 @@ def patient(fast: None, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-async def controller(deps: Platform, runtime: RecordingPeripheralOutput, fast: None) -> AsyncIterator[ZwaveController]:
-    controller = ZwaveController(deps)
-    controller.runtime = runtime
+async def controller(
+    platform: Platform, output: RecordingControllerOutput, fast: None
+) -> AsyncIterator[ZwaveController]:
+    controller = ZwaveController(platform)
+    controller.output = output
     yield controller
     await controller.stop()
 

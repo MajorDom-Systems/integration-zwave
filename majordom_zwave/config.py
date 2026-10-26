@@ -48,7 +48,7 @@ def zwave_js_server() -> Service[ZwaveNetwork]:
                 "S2_ACCESS_CONTROL_KEY": "{settings.s2_access_control}",
                 "LR_S2_AUTHENTICATED_KEY": "{settings.lr_s2_authenticated}",
                 "LR_S2_ACCESS_CONTROL_KEY": "{settings.lr_s2_access_control}",
-                "RF_REGION": "{context.region}",
+                "RF_REGION": "{platform.region}",
             },
         },
     )

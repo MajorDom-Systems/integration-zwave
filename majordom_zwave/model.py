@@ -15,7 +15,7 @@ class ZwaveParameterIntegrationData(BaseModel):
     state_value_id: str | None = None  # the value the state is read from, when it is another one (current vs target)
 
 
-class ZwaveDevice(Device):
+class ZwaveDevice(Device[ZwaveDeviceIntegrationData | None]):
     integration_data: ZwaveDeviceIntegrationData | None = None  # None until paired: the Hub creates the device first
     parameters: list["ZwaveParameter"] = Field(default_factory=list)
 
@@ -25,5 +25,5 @@ class ZwaveDevice(Device):
         return value or None  # the device the Hub creates before pairing carries `{}`
 
 
-class ZwaveParameter(Parameter):
+class ZwaveParameter(Parameter[ZwaveParameterIntegrationData]):
     integration_data: ZwaveParameterIntegrationData

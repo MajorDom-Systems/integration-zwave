@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from majordom_integration_sdk import Context, Endpoint
+from majordom_integration_sdk import Endpoint
 from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime
 from majordom_integration_sdk.testing import FakeCompose, build_test_platform
 
@@ -31,11 +31,11 @@ def test_provides_its_url_on_the_allocated_port():
 
 
 async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(tmp_path: Path):
-    platform = build_test_platform().copy(context=Context(region="Europe"))
+    platform = build_test_platform(tmp_path / "peripherals", region="Europe")
     stick = Endpoint("zwave", "serial-api", "/dev/serial/by-id/usb-0658_0200-if00")
     exported = majordom_zwave.peripherals(platform)
     [controller] = [peripheral for peripheral in exported if isinstance(peripheral, ZwaveController)]
-    runtime = Runtime(tmp_path, [Pinned(stick), FakeCompose(), *exported], context=lambda: platform.context)
+    runtime = Runtime(tmp_path, [Pinned(stick), FakeCompose(), *exported], platform=platform)
     await runtime.start()
     try:
         await wait_until(lambda: runtime.status(controller).state == PeripheralState.RUNNING, 10, "the controller")

@@ -20,7 +20,7 @@ async def test_a_device_included_in_the_pairing_window_is_discovered(
     await controller.start()
     discovery = await discover(controller, output, network, 5, "switch")
 
-    assert discovery.integration == controller.name
+    assert discovery.integration == controller.key
     assert discovery.transport == "ZWAVE"
     assert discovery.expected_credentials_options == [CredentialsType.none]
     assert discovery.id in controller.discoveries
