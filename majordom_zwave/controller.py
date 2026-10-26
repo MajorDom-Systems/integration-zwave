@@ -44,6 +44,21 @@ AUTHENTICATED = {SecurityClass.S2_AUTHENTICATED, SecurityClass.S2_ACCESS_CONTROL
 S2 = {SecurityClass.S2_UNAUTHENTICATED, *AUTHENTICATED}
 
 
+class _Client(ZwaveClient):
+    """zwave-js-server's client cancels every call still waiting when its connection drops. In the caller (the Hub's
+    task, which nobody cancelled) that cancel would pass by every error handler, the Hub's too: it raises a
+    ConnectionError instead. A cancel of the caller itself stays one."""
+
+    @override
+    async def async_send_command(self, message: dict[str, Any], require_schema: int | None = None) -> dict:
+        try:
+            return await super().async_send_command(message, require_schema)
+        except asyncio.CancelledError:
+            if (task := asyncio.current_task()) is not None and task.cancelling():
+                raise
+            raise ConnectionError("the connection to zwave-js-server was lost") from None
+
+
 class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
 
@@ -165,7 +180,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         while True:
             listening: asyncio.Task | None = None
             try:
-                client = ZwaveClient(url, session)
+                client = _Client(url, session)
                 await client.connect()
                 ready = asyncio.Event()
                 listening = asyncio.create_task(client.listen(ready))
