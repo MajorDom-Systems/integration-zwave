@@ -107,6 +107,22 @@ async def test_a_device_that_never_becomes_ready_fails_pairing_and_stays_discove
     assert discovery.id in controller.discoveries
 
 
+async def test_stopping_ends_a_pairing_that_waits_for_the_interview(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch", silent=True)
+    await hub_creates_device(controller.platform, discovery)
+    pairing = asyncio.create_task(controller.pair_device(discovery, None))
+    await asyncio.sleep(0.3)
+
+    await controller.stop()
+
+    with pytest.raises(ConnectionError):  # at once, not when the interview times out
+        await asyncio.wait_for(pairing, 1)
+    assert not controller.discoveries  # not offered again by a pairing that outlived the stop
+
+
 async def test_the_s2_pin_entered_with_the_pairing_window_includes_securely(
     controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
 ):

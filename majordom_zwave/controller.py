@@ -80,6 +80,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         self._credentials: ProvidedCredentials | None = None  # of the open pairing window
         self._closing_window: asyncio.Task | None = None
         self._removal: asyncio.Future[int] | None = None  # the node id the running exclusion removed
+        self._interviews: set[asyncio.Future[None]] = set()  # the ones pairings wait for
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -129,14 +130,16 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         self._supervisor = None
         self._tasks.clear()
         self._credentials = None
-        if self._removal is not None and not self._removal.done():
-            self._removal.set_exception(ConnectionError("Z-Wave stopped before the device left the network"))
         await self._release()
         if self._session is not None:
             await self._session.close()
             self._session = None
         self._discoveries.clear()
         self._available.clear()
+        # last, so a pairing or an unpairing waiting on the network resumes with nothing left to take
+        for waiting in [self._removal, *self._interviews]:
+            if waiting is not None and not waiting.done():
+                waiting.set_exception(ConnectionError("Z-Wave stopped"))
 
     async def _run(self, url: str, session: ClientSession):
         attempt = 0
@@ -329,9 +332,10 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
             log.debug(f"[PAIR] node_id={node.node_id} mapped schema\n\t{schema}")
         except Exception as exc:
             log.warning(f"[PAIR] pairing {discovery.id} failed: {exc}")
-            failed = known.model_copy(update={"last_error": str(exc)})
-            self._discoveries[discovery.id] = failed
-            await self.output.controller_did_update_discovery(self, failed)
+            if discovery.id in self._discoveries:  # not lost meanwhile, nor gone with a stop
+                failed = known.model_copy(update={"last_error": str(exc)})
+                self._discoveries[discovery.id] = failed
+                await self.output.controller_did_update_discovery(self, failed)
             raise
 
         self._discoveries.pop(discovery.id, None)
@@ -578,15 +582,17 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
             await self._wait_for(node, "ready")  # carries the node's state; "interview completed" doesn't
 
     async def _wait_for(self, node: Node, event: str):
-        happened = asyncio.Event()
-        unsubscribe = node.on(event, lambda _: happened.set())
+        happened: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        unsubscribe = node.on(event, lambda _: happened.done() or happened.set_result(None))
+        self._interviews.add(happened)
         try:
-            await asyncio.wait_for(happened.wait(), self.READY_TIMEOUT)
+            await asyncio.wait_for(happened, self.READY_TIMEOUT)
         except TimeoutError:
             raise TimeoutError(
                 "The device did not finish its interview: wake it up (or move it closer) and pair it again"
             ) from None
         finally:
+            self._interviews.discard(happened)
             unsubscribe()
 
     async def _supported_notification_events(self, node: Node) -> list[dict[str, Any]]:
