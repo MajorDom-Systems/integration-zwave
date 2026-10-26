@@ -33,15 +33,16 @@ def test_the_network_keys_are_write_only():
     assert [name for name, field in fields.items() if not field.get("writeOnly")] == []
 
 
+@pytest.mark.parametrize("listen_address", ["127.0.0.1", "0.0.0.0"])  # the Hub only, or a lab harness on the LAN
 @pytest.mark.parametrize(("region", "rendered"), [("Europe", "Europe"), (None, "")])  # none: the stick keeps its own
 async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(
-    tmp_path: Path, region: str | None, rendered: str
+    tmp_path: Path, region: str | None, rendered: str, listen_address: str
 ):
     platform = build_test_platform(tmp_path / "peripherals", region=region)
     stick = Endpoint("zwave", "serial-api", "/dev/serial/by-id/usb-0658_0200-if00")
     exported = majordom_zwave.peripherals(platform)
     [controller] = [peripheral for peripheral in exported if isinstance(peripheral, ZwaveController)]
-    runtime = Runtime(tmp_path, [Pinned(stick), FakeCompose(), *exported], platform=platform)
+    runtime = Runtime(tmp_path, [Pinned(stick), FakeCompose(listen_address), *exported], platform=platform)
     await runtime.start()
     try:
         # started once the server runs; FakeCompose runs none, so it fails to connect and is started again later
@@ -54,6 +55,6 @@ async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(
         port = container["command"][container["command"].index("--port") + 1]
         assert controller.peripherals.endpoint("zwave").url == f"ws://127.0.0.1:{port}"
         # on the host network, unauthenticated: anyone on the LAN could drive the stick (unlock doors, wipe it)
-        assert container["command"][container["command"].index("--host") + 1] == "127.0.0.1"
+        assert container["command"][container["command"].index("--host") + 1] == listen_address
     finally:
         await runtime.stop()

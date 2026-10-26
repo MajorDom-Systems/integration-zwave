@@ -43,8 +43,9 @@ def zwave_js_server() -> Service[ZwaveNetwork]:
             # :latest pinned by digest (2026-10-08); bump on purpose
             "image": "ghcr.io/kpine/zwave-js-server@sha256:19592f8e979525ac6f4e6cac22b28324edfaa757c9d2da3d6fec9c4b2ddd18a8",  # noqa: E501
             "network_mode": "host",
-            # the image's own command, with a port it doesn't take from the environment; on loopback only: the server
-            # has no authentication, and on the host network it would take commands from anyone on the LAN
+            # the image's own command, with a port it doesn't take from the environment; on loopback unless the host
+            # opens its services to the LAN: the server has no authentication, and on the host network it would take
+            # commands from anyone on the LAN
             "command": [
                 "server",
                 "/dev/zwave",
@@ -52,7 +53,7 @@ def zwave_js_server() -> Service[ZwaveNetwork]:
                 "options.js",
                 "--disable-dns-sd",
                 "--host",
-                "127.0.0.1",
+                "{host.listen_address}",
                 "--port",
                 "{ports.api}",
             ],
