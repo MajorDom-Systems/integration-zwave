@@ -45,5 +45,7 @@ async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(
         assert container["environment"]["RF_REGION"] == rendered
         port = container["command"][container["command"].index("--port") + 1]
         assert controller.peripherals.endpoint("zwave").url == f"ws://127.0.0.1:{port}"
+        # on the host network, unauthenticated: anyone on the LAN could drive the stick (unlock doors, wipe it)
+        assert container["command"][container["command"].index("--host") + 1] == "127.0.0.1"
     finally:
         await runtime.stop()

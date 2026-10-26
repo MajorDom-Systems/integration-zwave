@@ -37,8 +37,19 @@ def zwave_js_server() -> Service[ZwaveNetwork]:
             # :latest pinned by digest (2026-10-08); bump on purpose
             "image": "ghcr.io/kpine/zwave-js-server@sha256:19592f8e979525ac6f4e6cac22b28324edfaa757c9d2da3d6fec9c4b2ddd18a8",  # noqa: E501
             "network_mode": "host",
-            # the image's own command, with a port it doesn't take from the environment
-            "command": ["server", "/dev/zwave", "--config", "options.js", "--disable-dns-sd", "--port", "{ports.api}"],
+            # the image's own command, with a port it doesn't take from the environment; on loopback only: the server
+            # has no authentication, and on the host network it would take commands from anyone on the LAN
+            "command": [
+                "server",
+                "/dev/zwave",
+                "--config",
+                "options.js",
+                "--disable-dns-sd",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "{ports.api}",
+            ],
             "userns_mode": "host",  # a remapped user can't open the stick on hosts with userns-remap
             "devices": ["{peripherals.zwave.url}:/dev/zwave"],
             # our device files take precedence over zwave-js's own (the image's priority dir)
