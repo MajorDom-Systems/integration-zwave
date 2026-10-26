@@ -255,6 +255,10 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     async def _detach(self, reason: str):
         devices = list(self._nodes)
         await self._release()
+        lost = "The connection to zwave-js-server was lost: pair the device again"
+        for waiting in self._interviews:  # on the lost connection's nodes, which never hear the interview end
+            if not waiting.done():
+                waiting.set_exception(ConnectionError(lost))
         for device_id in devices:
             await self._set_available(device_id, False, reason)
 

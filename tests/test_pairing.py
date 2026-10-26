@@ -124,6 +124,24 @@ async def test_stopping_ends_a_pairing_that_waits_for_the_interview(
     assert not controller.discoveries  # not offered again by a pairing that outlived the stop
 
 
+async def test_losing_the_server_ends_a_pairing_that_waits_for_the_interview(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    """The lost connection's node never hears the interview end (the next connection has nodes of its own)."""
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch", silent=True)
+    await hub_creates_device(controller.platform, discovery)
+    pairing = asyncio.create_task(controller.pair_device(discovery, None))
+    await asyncio.sleep(0.3)
+
+    await network.drop_server()
+
+    with pytest.raises(ConnectionError, match="lost"):  # at once, not when the interview times out with other advice
+        await asyncio.wait_for(pairing, 2)
+    assert "pair the device again" in (output.updated_discoveries[-1].last_error or "")
+    assert discovery.id in controller.discoveries
+
+
 async def test_stopping_closes_the_pairing_window(controller: ZwaveController, network: MockNetwork):
     """zwave-js-server outlives the controller: an inclusion left running would take the next device for nobody, and
     keep the next window from opening."""
