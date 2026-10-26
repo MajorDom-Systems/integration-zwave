@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 from majordom_integration_sdk.testing import RecordingControllerOutput
+from zwave_js_server.const import InclusionState
 
 from majordom_zwave import ZwaveController
 from tests.helpers import pair, stored
@@ -49,6 +50,10 @@ async def test_stopping_ends_an_unpairing_that_waits_for_the_device(
 
     with pytest.raises(ConnectionError):  # at once, not when the exclusion times out
         await asyncio.wait_for(unpairing, 1)
+    assert (await stored(controller, device.id)).last_error is None  # no button to press any more
+
+    await controller.start()  # on the same server, which outlived the controller
+    assert controller._controller().inclusion_state == InclusionState.IDLE  # the next button pressed removes nothing
 
 
 async def test_excluding_another_device_does_not_count_as_removing_this_one(

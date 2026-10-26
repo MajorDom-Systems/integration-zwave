@@ -6,6 +6,7 @@ import pytest
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.schemas.parameter import ParameterRole, ParameterVisibility
 from majordom_integration_sdk.testing import RecordingControllerOutput
+from zwave_js_server.const import InclusionState
 
 from majordom_zwave import ZwaveController
 from tests.helpers import ROOM, discover, hub_creates_device, pair, param, stored, wait_until
@@ -121,6 +122,18 @@ async def test_stopping_ends_a_pairing_that_waits_for_the_interview(
     with pytest.raises(ConnectionError):  # at once, not when the interview times out
         await asyncio.wait_for(pairing, 1)
     assert not controller.discoveries  # not offered again by a pairing that outlived the stop
+
+
+async def test_stopping_closes_the_pairing_window(controller: ZwaveController, network: MockNetwork):
+    """zwave-js-server outlives the controller: an inclusion left running would take the next device for nobody, and
+    keep the next window from opening."""
+    await controller.start()
+    await controller.start_pairing_window(120)
+
+    await controller.stop()
+    await controller.start()  # the same instance on the same server, as the runtime starts it again
+
+    assert controller._controller().inclusion_state == InclusionState.IDLE
 
 
 async def test_the_s2_pin_entered_with_the_pairing_window_includes_securely(

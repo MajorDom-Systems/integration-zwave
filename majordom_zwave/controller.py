@@ -79,6 +79,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         self._available: dict[UUID, bool] = {}
         self._credentials: ProvidedCredentials | None = None  # of the open pairing window
         self._closing_window: asyncio.Task | None = None
+        self._is_including = False  # an inclusion this run began may still run on the server
         self._removal: asyncio.Future[int] | None = None  # the node id the running exclusion removed
         self._interviews: set[asyncio.Future[None]] = set()  # the ones pairings wait for
 
@@ -123,6 +124,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
             supervisor.result()  # raises why it couldn't connect
 
     async def stop(self):
+        await self._end_inclusion_and_exclusion()
         for task in [self._supervisor, *self._tasks]:
             if task is not None:
                 task.cancel()
@@ -130,6 +132,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         self._supervisor = None
         self._tasks.clear()
         self._credentials = None
+        self._is_including = False
         await self._release()
         if self._session is not None:
             await self._session.close()
@@ -140,6 +143,22 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         for waiting in [self._removal, *self._interviews]:
             if waiting is not None and not waiting.done():
                 waiting.set_exception(ConnectionError("Z-Wave stopped"))
+
+    async def _end_inclusion_and_exclusion(self):
+        """Ends the ones this run began, while still connected: zwave-js-server outlives the controller, and would go
+        on including (the next device to join is paired by nobody, the next window doesn't open) or excluding (the
+        next button pressed removes a device)."""
+        if not self.connected:
+            return
+        controller = self._controller()
+        try:
+            async with asyncio.timeout(5):  # well within the runtime's time for a stop
+                if self._is_including:
+                    await controller.async_stop_inclusion()
+                if self._removal is not None:
+                    await controller.async_stop_exclusion()
+        except Exception:  # noqa: BLE001  the stop goes on: a server that doesn't answer can't be told
+            log.warning("[STOP] ending the inclusion or exclusion failed", exc_info=True)
 
     async def _run(self, url: str, session: ClientSession):
         attempt = 0
@@ -268,6 +287,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
             log.debug("[PAIRING] SmartStart device provisioned: it joins when powered on")
             return
         self._credentials = credentials  # before inclusion starts: a device can ask for its grant right away
+        self._is_including = True  # before too: a stop() meanwhile ends it
         try:
             if kind == CredentialsType.qr:
                 # a malformed code is rejected here (ValueError); the server parses the rest
@@ -369,6 +389,9 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                 reason = "The device was not put into exclusion mode in time: it is still on the network"
                 await self._update_device(device.id, last_error=reason)
                 raise TimeoutError(reason) from None
+            except Exception:
+                await self._update_device(device.id, last_error=None)  # no longer waiting for the device
+                raise
             finally:
                 self._removal = None
                 try:
@@ -559,6 +582,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         self._credentials = None
         controller = self._controller()
         await controller.async_stop_inclusion()
+        self._is_including = False
         log.debug("[PAIRING] inclusion window closed")
 
         # Joined but never paired: a node that failed is removed (it can't be paired anymore); a live one stays a
