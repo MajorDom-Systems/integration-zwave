@@ -17,7 +17,7 @@ classifiers = [
     "Topic :: Home Automation",
     "Programming Language :: Python :: 3",
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.13,<4.0"
 dependencies = [
     "majordom-integration-sdk (>=0.3.0,<1.0)",
     "zwave-js-server-python (>=0.74.0,<0.75.0)",
