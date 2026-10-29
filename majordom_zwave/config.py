@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from majordom_integration_sdk import Endpoint, Need, Service
+from majordom_integration_sdk import SettingsExtraField as Extra
 from pydantic import BaseModel, Field
 
 KEY = r"^[0-9A-Fa-f]{32}$"  # 16 bytes in hex: zwave-js-server exits on any other key
@@ -16,7 +17,7 @@ def _key() -> str:
 
 def _key_field(title: str) -> Any:
     """Generated once; write-only: the Hub never reads it back through its API, and a change without it keeps it."""
-    return Field(default_factory=_key, title=title, pattern=KEY, json_schema_extra={"writeOnly": True})
+    return Field(default_factory=_key, title=title, pattern=KEY, json_schema_extra={Extra.write_only: True})
 
 
 class ZwaveNetwork(BaseModel):
