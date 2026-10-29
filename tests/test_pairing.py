@@ -1,14 +1,19 @@
 """Pairing: inclusion through the pairing window, S2 credentials, and what pairing leaves in the Hub."""
 
 import asyncio
+from typing import Any
+from uuid import UUID
 
 import pytest
-from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
+from majordom_integration_sdk.repository.memory import DeviceRepositoryMemory
+from majordom_integration_sdk.schemas.device import CredentialsType, Device, ProvidedCredentials
 from majordom_integration_sdk.schemas.parameter import ParameterRole, ParameterVisibility
 from majordom_integration_sdk.testing import RecordingControllerOutput
+from zwave_js_server.const import InclusionState
+from zwave_js_server.model.controller import Controller
 
 from majordom_zwave import ZwaveController
-from tests.helpers import ROOM, discover, hub_creates_device, pair, param, stored, wait_until
+from tests.helpers import ROOM, changes, discover, hub_creates_device, pair, param, stored, wait_until
 from tests.network import HOME_ID, MockNetwork
 
 BINARY_SWITCH = "37-0-targetValue"
@@ -20,7 +25,7 @@ async def test_a_device_included_in_the_pairing_window_is_discovered(
     await controller.start()
     discovery = await discover(controller, output, network, 5, "switch")
 
-    assert discovery.integration == controller.name
+    assert discovery.integration == controller.key
     assert discovery.transport == "ZWAVE"
     assert discovery.expected_credentials_options == [CredentialsType.none]
     assert discovery.id in controller.discoveries
@@ -98,13 +103,136 @@ async def test_a_device_that_never_becomes_ready_fails_pairing_and_stays_discove
 ):
     await controller.start()
     discovery = await discover(controller, output, network, 5, "switch", silent=True)  # joins, then never answers
-    await hub_creates_device(controller.dependencies, discovery)
+    await hub_creates_device(controller.platform, discovery)
 
     with pytest.raises(TimeoutError):
         await controller.pair_device(discovery, None)
 
     assert output.updated_discoveries[-1].last_error
     assert discovery.id in controller.discoveries
+
+
+async def test_stopping_ends_a_pairing_that_waits_for_the_interview(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch", silent=True)
+    await hub_creates_device(controller.platform, discovery)
+    pairing = asyncio.create_task(controller.pair_device(discovery, None))
+    await asyncio.sleep(0.3)
+
+    await controller.stop()
+
+    with pytest.raises(ConnectionError):  # at once, not when the interview times out
+        await asyncio.wait_for(pairing, 1)
+    assert not controller.discoveries  # not offered again by a pairing that outlived the stop
+
+
+async def test_losing_the_server_ends_a_pairing_that_waits_for_the_interview(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    """The lost connection's node never hears the interview end (the next connection has nodes of its own)."""
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch", silent=True)
+    await hub_creates_device(controller.platform, discovery)
+    pairing = asyncio.create_task(controller.pair_device(discovery, None))
+    await asyncio.sleep(0.3)
+
+    await network.drop_server()
+
+    with pytest.raises(ConnectionError, match="lost"):  # at once, not when the interview times out with other advice
+        await asyncio.wait_for(pairing, 2)
+    assert "pair the device again" in (output.updated_discoveries[-1].last_error or "")
+    assert discovery.id in controller.discoveries
+
+
+async def test_a_pairing_that_outlives_a_stop_adopts_nothing(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Stopped while the Hub saves the device: refused, the Hub deletes the device it created, and the next start
+    offers the node again. Adopted, the stopped run's node would report the device connected, and serve it later."""
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch")
+    await hub_creates_device(controller.platform, discovery)
+    save = DeviceRepositoryMemory.save
+    saving = asyncio.Event()
+
+    async def slow_save(self: DeviceRepositoryMemory, device: Device, previous_id: UUID | None = None):
+        saving.set()
+        await asyncio.sleep(0.5)  # the Hub's SQLite, under load
+        await save(self, device, previous_id)
+
+    monkeypatch.setattr(DeviceRepositoryMemory, "save", slow_save)
+    pairing = asyncio.create_task(controller.pair_device(discovery, None))
+    await saving.wait()
+    await controller.stop()
+    reported = len(changes(output))
+
+    with pytest.raises(ConnectionError, match="pair the device again"):
+        await pairing
+    assert discovery.id not in output.connected_devices
+    assert len(changes(output)) == reported
+
+
+async def test_a_pairing_whose_server_is_lost_while_the_hub_reads_says_why(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch")
+    await hub_creates_device(controller.platform, discovery)
+    get = DeviceRepositoryMemory.get
+
+    async def get_while_the_server_drops(self: DeviceRepositoryMemory, device_id: UUID, as_: type[Device] = Device):
+        await network.drop_server()
+        await wait_until(lambda: controller._zwave_client is None, 10, "the connection to be let go")
+        return await get(self, device_id, as_)
+
+    monkeypatch.setattr(DeviceRepositoryMemory, "get", get_while_the_server_drops)
+    with pytest.raises(ConnectionError):
+        await controller.pair_device(discovery, None)
+    assert output.updated_discoveries[-1].last_error
+
+
+async def test_a_pairing_window_opening_across_a_stop_is_refused(
+    controller: ZwaveController, network: MockNetwork, monkeypatch: pytest.MonkeyPatch
+):
+    """Stopped after the server opened it, before the Hub's call resumed: its closing task would outlive the stop."""
+    await controller.start()
+    begin = Controller.async_begin_inclusion
+    answered = asyncio.Event()
+
+    async def late(self: Controller, *args: Any, **kwargs: Any) -> bool:
+        answer = await begin(self, *args, **kwargs)
+        answered.set()
+        await asyncio.sleep(0.3)  # the Hub's task resumes after the stop
+        return answer
+
+    monkeypatch.setattr(Controller, "async_begin_inclusion", late)
+    opening = asyncio.create_task(controller.start_pairing_window(60))
+    await answered.wait()
+    await controller.stop()
+
+    with pytest.raises(ConnectionError):
+        await opening
+    assert not controller._tasks
+
+
+async def test_stopping_closes_the_pairing_window(controller: ZwaveController, network: MockNetwork):
+    """zwave-js-server outlives the controller: an inclusion left running would take the next device for nobody, and
+    keep the next window from opening."""
+    await controller.start()
+    await controller.start_pairing_window(120)
+
+    await controller.stop()
+    await controller.start()  # the same instance on the same server, as the runtime starts it again
+
+    assert controller._controller().inclusion_state == InclusionState.IDLE
 
 
 async def test_the_s2_pin_entered_with_the_pairing_window_includes_securely(

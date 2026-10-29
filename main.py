@@ -1,10 +1,12 @@
 import asyncio
 import logging
 
-from majordom_integration_sdk import Endpoint
 from majordom_integration_sdk.dev import run_controller
 
-from majordom_zwave import ZwaveController
+import majordom_zwave
 
 logging.getLogger("majordom_zwave").setLevel(logging.DEBUG)
-asyncio.run(run_controller(ZwaveController, links={"zwave": Endpoint("zwave", "ws", "ws://localhost:3000")}))
+# The runtime finds the stick and runs zwave-js-server for it; without Docker, pin a zwave-js-server you run instead:
+# from majordom_integration_sdk import Endpoint
+# run_controller(majordom_zwave.peripherals, pinned=[Endpoint("zwave", "zwave-js-ws", "ws://localhost:3000")])
+asyncio.run(run_controller(majordom_zwave.peripherals))

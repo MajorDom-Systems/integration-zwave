@@ -10,6 +10,7 @@ import contextlib
 import itertools
 import json
 import socket
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Self
 
@@ -24,7 +25,7 @@ def free_port() -> int:
 
 
 class MockNetwork:
-    def __init__(self, nodes: list[dict[str, Any]]) -> None:
+    def __init__(self, nodes: list[dict[str, Any]]):
         self.nodes = nodes
         self.port = free_port()
         self.url = f"ws://127.0.0.1:{self.port}"
@@ -66,11 +67,11 @@ class MockNetwork:
             raise RuntimeError(f"mock network {cmd} failed: {reply.get('error')}")
         return reply["result"]
 
-    async def serve(self) -> None:
+    async def serve(self):
         """Start (or restart) zwave-js-server on this network's port."""
         await self.call("server", port=self.port)
 
-    async def drop_server(self) -> None:
+    async def drop_server(self):
         """Stop zwave-js-server: connected clients lose their connection, the network itself keeps running."""
         await self.call("drop_server")
 
@@ -78,28 +79,28 @@ class MockNetwork:
         """Make a node wait for inclusion; returns its S2 `pin` and `dsk`, as printed on a real device's label."""
         return await self.call("join", node=node, kind=kind, **options)
 
-    async def report(self, node: int, kind: str, value: Any) -> None:
+    async def report(self, node: int, kind: str, value: Any):
         await self.call("report", node=node, kind=kind, value=value)
 
-    async def silence(self, node: int) -> None:
+    async def silence(self, node: int):
         await self.call("silence", node=node)
 
-    async def wake(self, node: int) -> None:
+    async def wake(self, node: int):
         """A sleeping device wakes up: it takes its queued commands, then sleeps again."""
         await self.call("wake", node=node)
 
-    async def power_on(self, node: int) -> None:
+    async def power_on(self, node: int):
         """A provisioned (SmartStart) device is powered on: it asks to join, and is included by its DSK."""
         await self.call("power_on", node=node)
 
     async def awake(self, node: int) -> bool:
         return (await self.call("awake", node=node))["awake"]
 
-    async def reject(self, node: int) -> None:
+    async def reject(self, node: int):
         """The node refuses the commands it gets (a supervised command is answered with a Fail status)."""
         await self.call("reject", node=node)
 
-    async def desync(self, node: int) -> None:
+    async def desync(self, node: int):
         """The node's S2 session dies (a power cut): it ignores S2 until the controller sends it a nonce."""
         await self.call("desync", node=node)
 
@@ -107,16 +108,16 @@ class MockNetwork:
         """What the device's relay really is, whatever zwave-js assumes."""
         return (await self.call("switch", node=node))["value"]
 
-    async def fail(self, node: int) -> None:
+    async def fail(self, node: int):
         await self.call("fail", node=node)
 
-    async def revive(self, node: int) -> None:
+    async def revive(self, node: int):
         await self.call("revive", node=node)
 
-    async def exclude(self, node: int) -> None:
+    async def exclude(self, node: int):
         await self.call("exclude", node=node)
 
-    async def reset(self, node: int) -> None:
+    async def reset(self, node: int):
         """The device is factory reset: it tells the controller it left, and goes silent."""
         await self.call("reset", node=node)
 
@@ -127,7 +128,7 @@ class MockNetwork:
         """The CC commands the node received, by class name (e.g. `IndicatorCCSet`)."""
         return (await self.call("frames", node=node))["frames"]
 
-    async def stop(self) -> None:
+    async def stop(self):
         if self._process is None or self._process.returncode is not None:
             return
         with contextlib.suppress(RuntimeError, ConnectionError, TimeoutError, json.JSONDecodeError):
@@ -137,3 +138,6 @@ class MockNetwork:
         except TimeoutError:
             self._process.kill()
             await self._process.wait()
+
+
+type MakeNetwork = Callable[..., Awaitable[MockNetwork]]  # the `make_network` fixture

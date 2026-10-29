@@ -1,13 +1,13 @@
 import asyncio
 import logging
 import re
+import time
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, override
 from uuid import UUID
 
 from aiohttp import ClientSession
-from majordom_integration_sdk import Need
-from majordom_integration_sdk.controller import AbstractController
+from majordom_integration_sdk import STABLE_RUN, AbstractController, IntegrationError, Need, NoSettings, Platform
 from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
@@ -26,7 +26,7 @@ from zwave_js_server.model.controller.inclusion_and_provisioning import Inclusio
 from zwave_js_server.model.node import Node
 from zwave_js_server.model.value import Value
 
-from . import config, mapper
+from . import mapper
 from .model import (
     ZwaveDevice,
     ZwaveDeviceIntegrationData,
@@ -45,15 +45,34 @@ AUTHENTICATED = {SecurityClass.S2_AUTHENTICATED, SecurityClass.S2_ACCESS_CONTROL
 S2 = {SecurityClass.S2_UNAUTHENTICATED, *AUTHENTICATED}
 
 
-class ZwaveController(AbstractController):
+class _Client(ZwaveClient):
+    """zwave-js-server's client cancels every call still waiting when its connection drops. In the caller (the Hub's
+    task, which nobody cancelled) that cancel would pass by every error handler, the Hub's too: it raises a
+    ConnectionError instead. A cancel of the caller itself stays one."""
+
+    @override
+    async def async_send_command(self, message: dict[str, Any], require_schema: int | None = None) -> dict:
+        try:
+            return await super().async_send_command(message, require_schema)
+        except asyncio.CancelledError:
+            if (task := asyncio.current_task()) is not None and task.cancelling():
+                raise
+            raise ConnectionError("the connection to zwave-js-server was lost") from None
+
+
+class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
 
-    needs = [Need("zwave", ["ws"])]
-    services = [config.ZWAVE_JS]
+    needs = [Need("zwave", ["zwave-js-ws"])]
 
-    name: ClassVar[str] = "ZWave"
+    name = "ZWave"
 
     RECONNECT_DELAYS: ClassVar[tuple[float, ...]] = (1, 2, 5, 10, 30)  # then 30 s between attempts
+    # An outage lasts from the lost connection until a new one held as long as the runtime's stable run, so drops in
+    # a row add up (a connection dropped before the driver was ready is a failed attempt); it is reported once it
+    # lasted this long, on each failure from then on
+    REPORT_OUTAGE_AFTER: ClassVar[float] = 15
+    STABLE_CONNECTION: ClassVar[float] = STABLE_RUN
     READY_TIMEOUT: ClassVar[float] = 120  # a device's interview; a sleeping device finishes it when it wakes up
     EXCLUSION_TIMEOUT: ClassVar[float] = 60  # for the user to put the device into exclusion mode
     IDENTIFY_BLINKS: ClassVar[int] = 5
@@ -62,12 +81,12 @@ class ZwaveController(AbstractController):
     # the value is read back here when it has not changed, so the Hub learns what the device actually did
     VERIFY_DELAY: ClassVar[float] = 6
 
-    def __init__(self, dependencies: AbstractController.Dependencies):
-        super().__init__(dependencies)
+    def __init__(self, platform: Platform, *, settings: NoSettings | None = None):
+        super().__init__(platform, settings=settings)
         self._session: ClientSession | None = None
         self._zwave_client: ZwaveClient | None = None
         self._supervisor: asyncio.Task | None = None
-        self._first_attempt = asyncio.Event()
+        self._first_connection = asyncio.Event()
         self._tasks: set[asyncio.Task] = set()
         self._discoveries: dict[UUID, Discovery] = {}
         self._joined: dict[UUID, Node] = {}  # nodes behind the discoveries
@@ -79,7 +98,9 @@ class ZwaveController(AbstractController):
         self._available: dict[UUID, bool] = {}
         self._credentials: ProvidedCredentials | None = None  # of the open pairing window
         self._closing_window: asyncio.Task | None = None
+        self._is_including = False  # an inclusion this run began may still run on the server
         self._removal: asyncio.Future[int] | None = None  # the node id the running exclusion removed
+        self._interviews: set[asyncio.Future[None]] = set()  # the ones pairings wait for
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -108,33 +129,66 @@ class ZwaveController(AbstractController):
     # -------------------------------------------------------------------------
 
     async def start(self):
-        """Connects to zwave-js-server and keeps reconnecting; an unreachable server is reported, not raised."""
+        """Connects to zwave-js-server, and raises when it can't; a connection lost later is reconnected."""
         self._session = ClientSession()
-        self._first_attempt.clear()
-        self._supervisor = asyncio.create_task(self._run(self.dependencies.links["zwave"].url, self._session))
-        await self._first_attempt.wait()
+        self._first_connection.clear()
+        url = self.peripherals.endpoint("zwave").url
+        supervisor = self._supervisor = asyncio.create_task(self._run(url, self._session))
+        connected = asyncio.create_task(self._first_connection.wait())
+        try:
+            await asyncio.wait({supervisor, connected}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            connected.cancel()
+        if supervisor.done():
+            supervisor.result()  # raises why it couldn't connect
 
     async def stop(self):
+        await self._end_inclusion_and_exclusion()
         for task in [self._supervisor, *self._tasks]:
             if task is not None:
                 task.cancel()
         await asyncio.gather(*[t for t in [self._supervisor, *self._tasks] if t is not None], return_exceptions=True)
         self._supervisor = None
         self._tasks.clear()
-        await self._disconnect()
+        self._credentials = None
+        self._is_including = False
+        await self._release()
         if self._session is not None:
             await self._session.close()
             self._session = None
         self._discoveries.clear()
-        self._joined.clear()
         self._available.clear()
+        # last, so a pairing or an unpairing waiting on the network resumes with nothing left to take
+        for waiting in [self._removal, *self._interviews]:
+            if waiting is not None and not waiting.done():
+                waiting.set_exception(ConnectionError("Z-Wave stopped"))
 
-    async def _run(self, url: str, session: ClientSession) -> None:
+    async def _end_inclusion_and_exclusion(self):
+        """Ends the inclusion or exclusion this run began, while still connected: zwave-js-server outlives the
+        controller, and would go on including (the next device to join is paired by nobody, the next window doesn't
+        open) or excluding (the next button pressed removes a device)."""
+        if not self.connected:
+            return
+        controller = self._controller()
+        try:
+            async with asyncio.timeout(5):  # well within the runtime's time for a stop
+                if self._is_including:
+                    await controller.async_stop_inclusion()
+                if self._removal is not None:
+                    await controller.async_stop_exclusion()
+        except Exception:  # noqa: BLE001  the stop goes on: a server that doesn't answer can't be told
+            log.warning("[STOP] ending the inclusion or exclusion failed", exc_info=True)
+
+    async def _run(self, url: str, session: ClientSession):
         attempt = 0
+        outage_since: float | None = None
+        unreachable = f"zwave-js-server at {url} is unreachable"
         while True:
             listening: asyncio.Task | None = None
+            connected_at: float | None = None
+            failing = unreachable
             try:
-                client = ZwaveClient(url, session)
+                client = _Client(url, session)
                 await client.connect()
                 ready = asyncio.Event()
                 listening = asyncio.create_task(client.listen(ready))
@@ -145,28 +199,38 @@ class ZwaveController(AbstractController):
                     listening.result()  # raises what made it stop
                     raise ConnectionError("the connection closed before the driver was ready")
                 self._zwave_client = client
+                failing = "Z-Wave failed to start"  # the server answered: what fails now is the Hub's side
                 await self._attach()
-                log.info("[READY] connected to %s", url)
-                attempt = 0
-                self._first_attempt.set()
+                log.info(f"[READY] connected to {url}")
+                await self.output.controller_did_resolve_error(self, "server-unreachable")
+                self._first_connection.set()
+                failing = unreachable
+                connected_at = time.monotonic()
                 await listening
                 raise ConnectionError("the connection to zwave-js-server closed")
-            except asyncio.CancelledError:
-                raise
             except Exception as exc:  # noqa: BLE001  any failure means: reconnect
-                reason = f"zwave-js-server at {url} is unreachable: {exc or type(exc).__name__}"
-                log.warning("[CONNECT] %s", reason)
-                await self._detach(reason)
-                if not self._first_attempt.is_set():
-                    await self.dependencies.output.controller_did_encounter_error(self, reason, True)
-                    self._first_attempt.set()
+                reason = f"{failing}: {exc or type(exc).__name__}"
+                if not self._first_connection.is_set():
+                    raise ConnectionError(reason) from exc  # start() raises it: the runtime starts it again later
+                log.warning(f"[CONNECT] {reason}")
+                now = time.monotonic()
+                if outage_since is None or (connected_at is not None and now - connected_at >= self.STABLE_CONNECTION):
+                    outage_since, attempt = now, 0  # a new outage
+                # the devices show unavailable meanwhile
+                try:
+                    await self._detach(reason)
+                    if now - outage_since >= self.REPORT_OUTAGE_AFTER:
+                        error = IntegrationError("server-unreachable", reason)
+                        await self.output.controller_did_encounter_error(self, error)
+                except Exception:  # noqa: BLE001  the Hub's side failed: reconnect all the same
+                    log.exception("[CONNECT] reporting the lost server failed")
             finally:
                 if listening is not None:
                     listening.cancel()
             await asyncio.sleep(self.RECONNECT_DELAYS[min(attempt, len(self.RECONNECT_DELAYS) - 1)])
             attempt += 1
 
-    async def _disconnect(self) -> None:
+    async def _disconnect(self):
         client, self._zwave_client = self._zwave_client, None
         if client is not None and client.connected:
             try:
@@ -174,7 +238,7 @@ class ZwaveController(AbstractController):
             except Exception:  # noqa: BLE001
                 log.debug("[CONNECT] disconnect failed", exc_info=True)
 
-    async def _attach(self) -> None:
+    async def _attach(self):
         """Binds the paired devices to the (new) driver's nodes and offers the other nodes as discoveries."""
         controller = self._controller()
         self._available.clear()  # report every device's availability afresh
@@ -187,7 +251,7 @@ class ZwaveController(AbstractController):
         )
         self._track(controller.on("validate dsk and enter pin", lambda data: self._spawn(self._enter_pin())))
 
-        async with self.dependencies.make_device_repository() as repo:
+        async with self.platform.device_repository(self) as repo:
             devices = [d for d in await repo.get_all(as_=ZwaveDevice) if d.integration_data is not None]
         claimed: set[int] = set()
         for device in devices:
@@ -216,10 +280,20 @@ class ZwaveController(AbstractController):
             if node.node_id != controller.own_node_id and node.node_id not in claimed:
                 await self._offer(node)
 
-    async def _detach(self, reason: str) -> None:
+    async def _detach(self, reason: str):
+        devices = list(self._nodes)
+        await self._release()
+        lost = "The connection to zwave-js-server was lost: pair the device again"
+        for waiting in self._interviews:  # on the lost connection's nodes, which never hear the interview end
+            if not waiting.done():
+                waiting.set_exception(ConnectionError(lost))
+        for device_id in devices:
+            await self._set_available(device_id, False, reason)
+
+    async def _release(self):
+        """Lets go of the connection and everything bound to it, silently."""
         for device_id in list(self._nodes):
             self._unbind(device_id)
-            await self._set_available(device_id, False, reason)
         for unsubscribe in self._listeners:
             unsubscribe()
         self._listeners.clear()
@@ -230,8 +304,9 @@ class ZwaveController(AbstractController):
     # Hub -> device operations
     # -------------------------------------------------------------------------
 
-    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None) -> None:
+    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None):
         controller = self._controller()
+        connection = self._zwave_client  # the run token: a window opened across a stop gets no closing task
         kind = credentials.type if credentials else CredentialsType.none
         value = (credentials.value if credentials else None) or ""
         if kind == CredentialsType.secret:
@@ -245,6 +320,7 @@ class ZwaveController(AbstractController):
             log.debug("[PAIRING] SmartStart device provisioned: it joins when powered on")
             return
         self._credentials = credentials  # before inclusion starts: a device can ask for its grant right away
+        self._is_including = True  # before too: a stop() meanwhile ends it
         try:
             if kind == CredentialsType.qr:
                 # a malformed code is rejected here (ValueError); the server parses the rest
@@ -258,7 +334,9 @@ class ZwaveController(AbstractController):
         except Exception:
             self._credentials = None
             raise
-        log.debug("[PAIRING] inclusion window opened for %ds (%s)", duration_sec, kind)
+        if self._zwave_client is not connection:  # stop() ended the inclusion meanwhile
+            raise ConnectionError("Z-Wave stopped while opening the pairing window")
+        log.debug(f"[PAIRING] inclusion window opened for {duration_sec}s ({kind})")
         if self._closing_window is not None:
             self._closing_window.cancel()
         self._closing_window = self._spawn(self._close_pairing_window(duration_sec))
@@ -268,11 +346,12 @@ class ZwaveController(AbstractController):
         node = self._joined.get(discovery.id)
         if known is None or node is None:
             raise ValueError("Unknown device: it is no longer discovered")
+        connection = self._zwave_client  # the run token: the node is this connection's
         try:
             if credentials is not None and credentials.type != CredentialsType.none:
                 raise ValueError("Z-Wave credentials are given when opening the pairing window")
             await self._wait_until_ready(node)
-            async with self.dependencies.make_device_repository() as repo:
+            async with self.platform.device_repository(self) as repo:
                 hub_device = await repo.get(discovery.id, as_=ZwaveDevice)  # the Hub creates it before pairing
             if hub_device is None:
                 raise LookupError("The Hub has not created a device for this discovery")
@@ -300,21 +379,23 @@ class ZwaveController(AbstractController):
                     ),
                 }
             )
-            async with self.dependencies.make_device_repository() as repo:
+            async with self.platform.device_repository(self) as repo:
                 await repo.save(device)
-            log.debug(
-                "[PAIR] node_id=%s mapped schema\n\t%s",
-                node.node_id,
-                "\n\t".join(
-                    f"{p.role:8} {p.visibility:8} {p.data_type:8} {p.name} ({p.integration_data.value_id})"
-                    for p in parameters
-                ),
+            if self._zwave_client is not connection:
+                # Stopped, restarted or reconnected meanwhile: refused, the Hub deletes the device it created, and the
+                # next connection offers the node again. Adopting it on the new connection may come later
+                raise ConnectionError("Z-Wave stopped or lost zwave-js-server while pairing: pair the device again")
+            schema = "\n\t".join(
+                f"{p.role:8} {p.visibility:8} {p.data_type:8} {p.name} ({p.integration_data.value_id})"
+                for p in parameters
             )
+            log.debug(f"[PAIR] node_id={node.node_id} mapped schema\n\t{schema}")
         except Exception as exc:
-            log.warning("[PAIR] pairing %s failed: %s", discovery.id, exc)
-            failed = known.model_copy(update={"last_error": str(exc)})
-            self._discoveries[discovery.id] = failed
-            await self.dependencies.output.controller_did_update_discovery(self, failed)
+            log.warning(f"[PAIR] pairing {discovery.id} failed: {exc}")
+            if discovery.id in self._discoveries:  # not lost meanwhile, nor gone with a stop
+                failed = known.model_copy(update={"last_error": str(exc)})
+                self._discoveries[discovery.id] = failed
+                await self.output.controller_did_update_discovery(self, failed)
             raise
 
         self._discoveries.pop(discovery.id, None)
@@ -348,6 +429,9 @@ class ZwaveController(AbstractController):
                 reason = "The device was not put into exclusion mode in time: it is still on the network"
                 await self._update_device(device.id, last_error=reason)
                 raise TimeoutError(reason) from None
+            except Exception:
+                await self._update_device(device.id, last_error=None)  # no longer waiting for the device
+                raise
             finally:
                 self._removal = None
                 try:
@@ -375,14 +459,14 @@ class ZwaveController(AbstractController):
         )
         if indicator is not None:
             await node.async_set_value(indicator, True)
-            log.debug("[IDENTIFY] node_id=%s via Indicator CC", node.node_id)
+            log.debug(f"[IDENTIFY] node_id={node.node_id} via Indicator CC")
             return
         if any(v.command_class == CommandClass.SWITCH_COLOR for v in node.values.values()):
             await self._blink(node)  # a light: blinking it is harmless, unlike toggling a relay's load
             return
-        log.info("[IDENTIFY] node_id=%s has no identify indicator and is not a light: nothing to show", node.node_id)
+        log.info(f"[IDENTIFY] node_id={node.node_id} has no identify indicator and is not a light: nothing to show")
 
-    async def _blink(self, node: Node) -> None:
+    async def _blink(self, node: Node):
         level = next(
             (
                 v
@@ -400,7 +484,7 @@ class ZwaveController(AbstractController):
             await asyncio.sleep(self.IDENTIFY_PERIOD)
             await node.async_set_value(level, restore)
             await asyncio.sleep(self.IDENTIFY_PERIOD)
-        log.debug("[IDENTIFY] node_id=%s blinked", node.node_id)
+        log.debug(f"[IDENTIFY] node_id={node.node_id} blinked")
 
     async def fetch(self, device: ZwaveDevice):
         await self._report_snapshot(device.id, self._require_node(device))
@@ -434,7 +518,7 @@ class ZwaveController(AbstractController):
             state = node.values.get(parameter.integration_data.state_value_id or value.value_id, value)
             self._spawn(self._verify(node, value, state, mapper.to_device(value, command.value)))
 
-    async def _verify(self, node: Node, value: Value, state: Value, sent: Any) -> None:
+    async def _verify(self, node: Node, value: Value, state: Value, sent: Any):
         """After an unconfirmed set: sends it again over a renewed S2 session when the old one is dead, or reads the
         value back unless zwave-js already did (its value then is the sent one)."""
         await asyncio.sleep(self.VERIFY_DELAY)
@@ -444,7 +528,7 @@ class ZwaveController(AbstractController):
             # A device that lost power can keep a dead S2 session and never ask for a new one (seen on a Shelly
             # Wave): it takes commands without acting on them, and zwave-js reports them applied. A nonce from the
             # controller starts a new session
-            log.info("[S2] node_id=%s doesn't answer securely: renewing its session", node.node_id)
+            log.info(f"[S2] node_id={node.node_id} doesn't answer securely: renewing its session")
             await node.async_invoke_cc_api(CommandClass.SECURITY_2, "sendNonce")
             await node.async_set_value(value, sent)
         elif state.metadata.readable and state.value != sent:
@@ -476,12 +560,12 @@ class ZwaveController(AbstractController):
         task.add_done_callback(self._done)
         return task
 
-    def _done(self, task: asyncio.Task) -> None:
+    def _done(self, task: asyncio.Task):
         self._tasks.discard(task)
         if not task.cancelled() and (exc := task.exception()) is not None:
-            log.error("[TASK] %s failed", task.get_coro(), exc_info=exc)
+            log.error(f"[TASK] {task.get_coro()} failed", exc_info=exc)
 
-    def _track(self, unsubscribe: Callable[[], None]) -> None:
+    def _track(self, unsubscribe: Callable[[], None]):
         self._listeners.append(unsubscribe)
 
     def _require_node(self, device: ZwaveDevice) -> Node:
@@ -498,8 +582,8 @@ class ZwaveController(AbstractController):
         ids = (node.manufacturer_id, node.product_type, node.product_id)
         return ":".join(f"{i:04x}" for i in ids) if all(i is not None for i in ids) else None
 
-    async def _update_device(self, device_id: UUID, **changes: Any) -> None:
-        async with self.dependencies.make_device_repository() as repo:
+    async def _update_device(self, device_id: UUID, **changes: Any):
+        async with self.platform.device_repository(self) as repo:
             device = await repo.get(device_id, as_=ZwaveDevice)
             if device is not None and any(getattr(device, k) != v for k, v in changes.items()):
                 await repo.save(device.model_copy(update=changes))
@@ -508,14 +592,14 @@ class ZwaveController(AbstractController):
     # Pairing
     # -------------------------------------------------------------------------
 
-    async def _offer(self, node: Node, low_security: bool = False) -> None:
+    async def _offer(self, node: Node, low_security: bool = False):
         device_id = self.device_uuid(f"{self._controller().home_id or 0:08x}-{node.node_id}")
         self._joined[device_id] = node
         if device_id in self._discoveries:
             return
         discovery = Discovery(
             id=device_id,
-            integration=NonEmptyStr(self.name),
+            integration=NonEmptyStr(self.key),
             expected_credentials_options=[CredentialsType.none],
             expiration=None,
             transport=NonEmptyStr("ZWAVE"),
@@ -530,14 +614,15 @@ class ZwaveController(AbstractController):
             ),
         )
         self._discoveries[device_id] = discovery
-        log.debug("[DISCOVERY] node_id=%s discovery_id=%s", node.node_id, device_id)
-        await self.dependencies.output.controller_did_receive_discovery(self, discovery)
+        log.debug(f"[DISCOVERY] node_id={node.node_id} discovery_id={device_id}")
+        await self.output.controller_did_receive_discovery(self, discovery)
 
-    async def _close_pairing_window(self, duration_sec: int) -> None:
+    async def _close_pairing_window(self, duration_sec: int):
         await asyncio.sleep(duration_sec)
         self._credentials = None
         controller = self._controller()
         await controller.async_stop_inclusion()
+        self._is_including = False
         log.debug("[PAIRING] inclusion window closed")
 
         # Joined but never paired: a node that failed is removed (it can't be paired anymore); a live one stays a
@@ -545,9 +630,9 @@ class ZwaveController(AbstractController):
         for node in list(self._joined.values()):
             if await controller.async_is_failed_node(node):
                 await controller.async_remove_failed_node(node)
-                log.debug("[PAIRING] node_id=%s removed after failing before it was paired", node.node_id)
+                log.debug(f"[PAIRING] node_id={node.node_id} removed after failing before it was paired")
 
-    async def _wait_until_ready(self, node: Node) -> None:
+    async def _wait_until_ready(self, node: Node):
         """Waits for the interview that fills node.values."""
         if not node.ready:
             await self._wait_for(node, "ready")
@@ -556,31 +641,33 @@ class ZwaveController(AbstractController):
         }:
             # It didn't answer in time (seen right after S2 bootstrapping). Without its identity zwave-js loads no
             # device file for it (parameter definitions, fixes), and a reused node id can't be told apart
-            log.debug("[PAIR] node_id=%s interviewed again: its identity is missing", node.node_id)
+            log.debug(f"[PAIR] node_id={node.node_id} interviewed again: its identity is missing")
             await node.async_refresh_info()
             await self._wait_for(node, "ready")  # carries the node's state; "interview completed" doesn't
 
-    async def _wait_for(self, node: Node, event: str) -> None:
-        happened = asyncio.Event()
-        unsubscribe = node.on(event, lambda _: happened.set())
+    async def _wait_for(self, node: Node, event: str):
+        happened: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        unsubscribe = node.on(event, lambda _: happened.done() or happened.set_result(None))
+        self._interviews.add(happened)
         try:
-            await asyncio.wait_for(happened.wait(), self.READY_TIMEOUT)
+            await asyncio.wait_for(happened, self.READY_TIMEOUT)
         except TimeoutError:
             raise TimeoutError(
                 "The device did not finish its interview: wake it up (or move it closer) and pair it again"
             ) from None
         finally:
+            self._interviews.discard(happened)
             unsubscribe()
 
     async def _supported_notification_events(self, node: Node) -> list[dict[str, Any]]:
         """The keypad and Notification CC events the node supports, as zwave-js knows them from its interview."""
-        assert self._zwave_client is not None
+        client = self._controller().client  # raises when the connection is gone
         try:
-            result = await self._zwave_client.async_send_command(
+            result = await client.async_send_command(
                 {"command": "node.get_supported_notification_events", "nodeId": node.node_id}, require_schema=43
             )
         except Exception:  # noqa: BLE001  an older server: no keypad or Notification CC event parameters
-            log.warning("[PAIR] node_id=%s: supported notification events unknown", node.node_id, exc_info=True)
+            log.warning(f"[PAIR] node_id={node.node_id}: supported notification events unknown", exc_info=True)
             return []
         return result.get("events", [])
 
@@ -624,7 +711,7 @@ class ZwaveController(AbstractController):
         ]
         return parameters
 
-    async def _grant(self, requested: InclusionGrant) -> None:
+    async def _grant(self, requested: InclusionGrant):
         """Grants what the joining device requested, except what needs a PIN nobody gave: then it joins with less
         security, and says so, instead of waiting for a PIN that never comes."""
         classes = requested.security_classes
@@ -632,9 +719,9 @@ class ZwaveController(AbstractController):
             classes = [c for c in classes if c not in AUTHENTICATED]
         grant = InclusionGrant(security_classes=classes, client_side_auth=requested.client_side_auth)
         await self._controller().async_grant_security_classes(grant)
-        log.debug("[S2] granted %s of %s", classes, requested.security_classes)
+        log.debug(f"[S2] granted {classes} of {requested.security_classes}")
 
-    async def _enter_pin(self) -> None:
+    async def _enter_pin(self):
         credentials = self._credentials
         if credentials is None or credentials.type != CredentialsType.code or not credentials.value:
             log.warning("[S2] the device asks for its PIN, but none was given")
@@ -645,13 +732,13 @@ class ZwaveController(AbstractController):
     # Device <-> Hub: Z-Wave network events & availability
     # -------------------------------------------------------------------------
 
-    async def _node_added(self, node: Node, data: dict) -> None:
-        log.debug("[JOIN] node_id=%s", node.node_id)
+    async def _node_added(self, node: Node, data: dict):
+        log.debug(f"[JOIN] node_id={node.node_id}")
         result = data.get("result") or {}
         await self._offer(node, low_security=bool(result.get("lowSecurity")))
 
-    async def _node_removed(self, node: Node, reason: RemoveNodeReason) -> None:
-        log.debug("[REMOVED] node_id=%s (%s)", node.node_id, reason)
+    async def _node_removed(self, node: Node, reason: RemoveNodeReason):
+        log.debug(f"[REMOVED] node_id={node.node_id} ({reason})")
         controller = self._controller()
         if reason == RemoveNodeReason.RESET and node.dsk and await controller.async_get_provisioning_entry(node.dsk):
             # a factory reset means leaving: on the SmartStart list, it would join again the moment it starts
@@ -662,13 +749,13 @@ class ZwaveController(AbstractController):
             if joined.node_id == node.node_id:
                 self._joined.pop(device_id)
                 if self._discoveries.pop(device_id, None) is not None:
-                    await self.dependencies.output.controller_did_lose_discovery(self, device_id)
+                    await self.output.controller_did_lose_discovery(self, device_id)
         for device_id, bound in list(self._nodes.items()):
             if bound.node_id == node.node_id:
                 self._unbind(device_id)
                 await self._set_available(device_id, False, "The device was removed from the Z-Wave network")
 
-    def _bind(self, device_id: UUID, node: Node, events: dict[str, Any]) -> None:
+    def _bind(self, device_id: UUID, node: Node, events: dict[str, Any]):
         self._unbind(device_id)
         self._nodes[device_id] = node
         self._routes[device_id] = mapper.reported_parameters(node)
@@ -684,18 +771,18 @@ class ZwaveController(AbstractController):
             node.on("alive", lambda _: self._spawn(self._update_availability(device_id, node))),
         ]
 
-    def _unbind(self, device_id: UUID) -> None:
+    def _unbind(self, device_id: UUID):
         self._nodes.pop(device_id, None)
         self._routes.pop(device_id, None)
         self._events.pop(device_id, None)
         for unsubscribe in self._unsubscribe.pop(device_id, []):
             unsubscribe()
 
-    async def _update_availability(self, device_id: UUID, node: Node) -> None:
+    async def _update_availability(self, device_id: UUID, node: Node):
         dead = node.status == NodeStatus.DEAD
         await self._set_available(device_id, not dead, "The device does not respond" if dead else None)
 
-    async def _set_available(self, device_id: UUID, available: bool, reason: str | None = None) -> None:
+    async def _set_available(self, device_id: UUID, available: bool, reason: str | None = None):
         """Reports a change of availability (with its reason as the device's last error)."""
         if self._available.get(device_id) == available:
             if not available and reason:  # a better reason for the same state (not answering, then removed)
@@ -704,38 +791,38 @@ class ZwaveController(AbstractController):
         self._available[device_id] = available
         await self._update_device(device_id, available=available, last_error=None if available else reason)
         if available:
-            await self.dependencies.output.controller_did_connect_device(self, device_id)
+            await self.output.controller_did_connect_device(self, device_id)
         else:
-            await self.dependencies.output.controller_did_lose_device(self, device_id)
+            await self.output.controller_did_lose_device(self, device_id)
 
-    async def _value_updated(self, device_id: UUID, value: Value) -> None:
+    async def _value_updated(self, device_id: UUID, value: Value):
         routes = self._routes.get(device_id, {})
         parameter_value_id = routes.get(value.value_id, value.value_id)
         if parameter_value_id is None:  # a target: the state is its current value
             return
         if value.value_id not in routes:  # appeared after pairing: no parameter for it
-            log.debug("[VALUE] %s has no parameter", value.value_id)
+            log.debug(f"[VALUE] {value.value_id} has no parameter")
             return
         event = DeviceParameterChange(
             device_id=device_id,
             parameter_id=self._parameter_id(device_id, parameter_value_id),
             value=mapper.to_hub(value, value.value),
         )
-        await self.dependencies.output.controller_did_receive_events(self, [event])
+        await self.output.controller_did_receive_events(self, [event])
 
-    async def _notified(self, device_id: UUID, notification: Any) -> None:
+    async def _notified(self, device_id: UUID, notification: Any):
         known = self._events.get(device_id, {})
         changes = []
         for value_id, value in mapper.notification_events(notification):
             if value_id not in known or (known[value_id] and value not in known[value_id]):
-                log.debug("[EVENT] %s=%r: not an event the device announced", value_id, value)
+                log.debug(f"[EVENT] {value_id}={value!r}: not an event the device announced")
                 continue
             parameter_id = self._parameter_id(device_id, value_id)
             changes.append(DeviceParameterChange(device_id=device_id, parameter_id=parameter_id, value=value))
         if changes:
-            await self.dependencies.output.controller_did_receive_events(self, changes)
+            await self.output.controller_did_receive_events(self, changes)
 
-    async def _report_snapshot(self, device_id: UUID, node: Node) -> None:
+    async def _report_snapshot(self, device_id: UUID, node: Node):
         events = [
             DeviceParameterChange(
                 device_id=device_id,
@@ -746,4 +833,4 @@ class ZwaveController(AbstractController):
             if mapper.role(value) != ParameterRole.event and (value.metadata.readable or state is not None)
         ]
         if events:
-            await self.dependencies.output.controller_did_receive_events(self, events)
+            await self.output.controller_did_receive_events(self, events)

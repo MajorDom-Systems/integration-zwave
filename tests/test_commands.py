@@ -56,6 +56,23 @@ async def test_a_failed_command_is_surfaced_and_not_reported_as_applied(
     assert (await stored(controller, device.id)).last_error
 
 
+async def test_a_command_cut_short_by_the_lost_server_fails_with_a_reason(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    """zwave-js-server's client cancels every pending call when the connection drops; as a cancel, it would pass by
+    the Hub's error handling (the Hub's task was never cancelled)."""
+    await controller.start()
+    device = await pair(controller, output, network)
+    await network.silence(5)  # out of range: zwave-js retries the command for a while
+    sending = asyncio.create_task(command(controller, device, param(device, SWITCH), True))
+    await asyncio.sleep(0.3)
+
+    await network.drop_server()
+
+    with pytest.raises(ConnectionError, match="could not be set: the connection to zwave-js-server was lost"):
+        await sending
+
+
 async def test_a_command_the_device_refuses_is_surfaced_and_not_reported_as_applied(
     controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
 ):
@@ -99,7 +116,10 @@ async def test_a_read_only_parameter_cannot_be_commanded(
 
 
 async def test_a_secure_device_that_ignored_a_command_gets_a_fresh_session_and_the_command_again(
-    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork, monkeypatch
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """A device that lost power can keep a dead S2 session and never ask for a new one (seen on a Shelly Wave): it
     takes commands without acting on them. A nonce from the controller starts a new session."""

@@ -1,32 +1,28 @@
 """Shared fixtures: a fresh controller and Hub doubles per test, and the mock Z-Wave network it connects to."""
 
-from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any, cast
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
-from majordom_integration_sdk import Endpoint
-from majordom_integration_sdk.controller import AbstractController
-from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_dependencies
+from majordom_integration_sdk import Endpoint, Peripherals, Platform
+from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 
 from majordom_zwave import ZwaveController
-from tests.network import MockNetwork
-
-INTEGRATION = "ZWave"
+from tests.network import MakeNetwork, MockNetwork
 
 
 @pytest.fixture
-def deps() -> AbstractController.Dependencies:
-    # A mutable links dict, so a network started later can point the controller at itself.
-    return build_test_dependencies(integration=INTEGRATION).copy(links={})
+def platform() -> Platform:
+    return build_test_platform()
 
 
 @pytest.fixture
-def output(deps: AbstractController.Dependencies) -> RecordingControllerOutput:
-    return cast(RecordingControllerOutput, deps.output)
+def output() -> RecordingControllerOutput:
+    return RecordingControllerOutput()
 
 
 @pytest.fixture
-def fast(monkeypatch: pytest.MonkeyPatch) -> None:
+def fast(monkeypatch: pytest.MonkeyPatch):
     """Shorten the waits meant for people and radios, so failure paths run in seconds."""
     monkeypatch.setattr(ZwaveController, "RECONNECT_DELAYS", (0.2, 0.5))
     monkeypatch.setattr(ZwaveController, "EXCLUSION_TIMEOUT", 2.0)
@@ -36,28 +32,31 @@ def fast(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def patient(fast: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def patient(fast: None, monkeypatch: pytest.MonkeyPatch):
     """Interviewing every capability of a CC takes the mock a few seconds (Notification, User Code)."""
     monkeypatch.setattr(ZwaveController, "READY_TIMEOUT", 90.0)
 
 
 @pytest.fixture
-async def controller(deps: AbstractController.Dependencies, fast: None) -> AsyncIterator[ZwaveController]:
-    controller = ZwaveController(deps)
+async def controller(
+    platform: Platform, output: RecordingControllerOutput, fast: None
+) -> AsyncIterator[ZwaveController]:
+    controller = ZwaveController(platform)
+    controller.output = output
     yield controller
     await controller.stop()
 
 
 @pytest.fixture
-async def make_network(deps: AbstractController.Dependencies) -> AsyncIterator[Callable[..., Awaitable[MockNetwork]]]:
-    """Start a mock network (with the given nodes already included) and point the integration at it."""
+async def make_network(controller: ZwaveController) -> AsyncIterator[MakeNetwork]:
+    """Start a mock network (with the given nodes already included) and bind the integration's need to it."""
     networks: list[MockNetwork] = []
 
     async def make(nodes: list[dict[str, Any]] | None = None, serve: bool = True) -> MockNetwork:
         network = MockNetwork(nodes or [])
         networks.append(network)
         await network.start(serve=serve)
-        cast(dict, deps.links)["zwave"] = Endpoint("zwave", "ws", network.url)
+        controller.peripherals = Peripherals({"zwave": Endpoint("zwave", "zwave-js-ws", network.url)})
         return network
 
     yield make
@@ -66,6 +65,6 @@ async def make_network(deps: AbstractController.Dependencies) -> AsyncIterator[C
 
 
 @pytest.fixture
-async def network(make_network: Callable[..., Awaitable[MockNetwork]]) -> MockNetwork:
+async def network(make_network: MakeNetwork) -> MockNetwork:
     """An empty network: devices join it during the test."""
     return await make_network()

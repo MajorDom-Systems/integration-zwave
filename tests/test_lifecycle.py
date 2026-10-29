@@ -2,35 +2,42 @@
 
 import asyncio
 import contextlib
+import sqlite3
+from pathlib import Path
+from uuid import UUID
 
 import aiohttp
-from majordom_integration_sdk.controller import AbstractController
+import pytest
+from majordom_integration_sdk import Endpoint, IntegrationError, Platform
+from majordom_integration_sdk.runtime import Pinned, Runtime, StatusKind
+from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput
 from zwave_js_server.client import Client
 
 from majordom_zwave import ZwaveController
 from tests.helpers import command, pair, param, stored, wait_for_value, wait_until
-from tests.network import MockNetwork
+from tests.network import MakeNetwork, MockNetwork, free_port
 
 SWITCH = "37-0-targetValue"
 
 
-async def restart(controller: ZwaveController, deps: AbstractController.Dependencies) -> ZwaveController:
+async def restart(controller: ZwaveController, platform: Platform) -> ZwaveController:
     """Stop and start the integration again, with the Hub's data kept (a Hub restart)."""
     await controller.stop()
-    again = ZwaveController(deps)
+    again = ZwaveController(platform)
+    again.peripherals, again.output = controller.peripherals, controller.output
     await again.start()
     return again
 
 
 async def test_paired_devices_are_reconnected_after_a_restart(
-    controller: ZwaveController, deps, output: RecordingControllerOutput, network: MockNetwork
+    controller: ZwaveController, platform: Platform, output: RecordingControllerOutput, network: MockNetwork
 ):
     await controller.start()
     device = await pair(controller, output, network)
     output.connected_devices.clear()
 
-    again = await restart(controller, deps)
+    again = await restart(controller, platform)
     try:
         assert device.id in output.connected_devices
         await network.report(5, "switch", True)
@@ -64,7 +71,7 @@ async def test_a_device_that_stops_answering_is_lost_and_found_again(
 
 
 async def test_a_dead_device_is_reported_unavailable_after_a_restart(
-    controller: ZwaveController, deps, output: RecordingControllerOutput, network: MockNetwork
+    controller: ZwaveController, platform: Platform, output: RecordingControllerOutput, network: MockNetwork
 ):
     await controller.start()
     device = await pair(controller, output, network)
@@ -75,7 +82,7 @@ async def test_a_dead_device_is_reported_unavailable_after_a_restart(
     output.lost_devices.clear()
     output.connected_devices.clear()
 
-    again = await restart(controller, deps)
+    again = await restart(controller, platform)
     try:
         assert device.id in output.lost_devices
         assert device.id not in output.connected_devices
@@ -99,23 +106,166 @@ async def test_losing_the_server_loses_the_devices_and_it_reconnects_when_back(
     assert await wait_for_value(output, param(device, SWITCH), lambda v: v is True)
 
 
-async def test_starting_without_the_server_does_not_fail_and_connects_once_it_is_up(
-    controller: ZwaveController, output: RecordingControllerOutput, make_network
+async def test_it_reconnects_though_reporting_the_lost_server_failed(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    await controller.start()
+    device = await pair(controller, output, network)
+    lose_device = output.controller_did_lose_device
+    failures = [sqlite3.OperationalError("database is locked")]  # the Hub's store, busy once
+
+    async def busy_once(controller: ZwaveController, device_id: UUID):
+        if failures:
+            raise failures.pop()
+        await lose_device(controller, device_id)
+
+    monkeypatch.setattr(output, "controller_did_lose_device", busy_once)
+    await network.drop_server()
+    await wait_until(lambda: not controller.connected, 10, "the server to be lost")
+
+    output.connected_devices.clear()
+    await network.serve()
+    await wait_until(lambda: device.id in output.connected_devices, 15, "the reconnection")
+
+
+def reported(output: RecordingControllerOutput) -> list[str]:
+    return [e.id for e in output.error_log if isinstance(e, IntegrationError)]
+
+
+async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(ZwaveController, "REPORT_OUTAGE_AFTER", 1.0)
+    await controller.start()
+    device = await pair(controller, output, network)
+
+    await network.drop_server()
+    await wait_until(lambda: device.id in output.lost_devices, 10, "the devices to be lost with the server")
+    assert not output.errors  # one failed reconnect is no outage yet
+    await wait_until(lambda: output.errors, 10, "the lost server to be reported")
+    await asyncio.sleep(1.5)  # a few more failed reconnects
+    assert list(output.errors) == ["server-unreachable"]
+
+    await network.serve()
+    await wait_until(lambda: not output.errors, 15, "the reconnection to resolve it")
+
+
+async def test_a_server_that_keeps_dropping_the_connection_is_reported(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Each connection holds for a moment only: the drops add up to one outage, until a connection holds."""
+    monkeypatch.setattr(ZwaveController, "REPORT_OUTAGE_AFTER", 1.0)
+    await controller.start()
+
+    for _ in range(6):
+        await network.drop_server()
+        await wait_until(lambda: not controller.connected, 10, "the drop")
+        await network.serve()
+        await wait_until(lambda: controller.connected, 10, "the reconnection")
+
+    assert "server-unreachable" in reported(output)
+
+
+async def test_a_server_lost_long_after_it_came_back_is_a_new_outage(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(ZwaveController, "REPORT_OUTAGE_AFTER", 1.0)
+    monkeypatch.setattr(ZwaveController, "STABLE_CONNECTION", 0.5)
+    await controller.start()
+    await network.drop_server()
+    await wait_until(lambda: not controller.connected, 10, "the drop")
+    await network.serve()
+    await wait_until(lambda: controller.connected, 10, "the reconnection")
+    await asyncio.sleep(1.5)  # held: the outage ended (and began longer ago than its report delay)
+
+    await network.drop_server()
+    await wait_until(lambda: not controller.connected, 10, "the second drop")
+    await asyncio.sleep(0.1)
+
+    assert reported(output) == []  # not yet: this outage only began
+
+
+async def test_starting_without_the_server_fails_and_a_later_start_connects(
+    controller: ZwaveController, output: RecordingControllerOutput, make_network: MakeNetwork
 ):
     network = await make_network(serve=False)
 
-    await controller.start()  # the server is not up yet: reported, not raised
-    assert output.errors and output.errors[-1][1] is True  # still running
+    with pytest.raises(ConnectionError, match="unreachable"):
+        await controller.start()
+    assert not output.errors  # the runtime says why it failed, and starts it again later
+    await controller.stop()  # as the runtime does after a failed start
 
     await network.serve()
-    await wait_until(lambda: controller.connected, 15, "the connection")
-
-
-async def test_stop_is_clean_without_a_connection(controller: ZwaveController, make_network):
-    await make_network(serve=False)
     await controller.start()
+    assert controller.connected
+
+
+async def test_a_start_the_hub_cut_short_doesnt_blame_the_server(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def busy(controller: ZwaveController, error_id: str):
+        raise sqlite3.OperationalError("database is locked")  # the Hub's store
+
+    monkeypatch.setattr(output, "controller_did_resolve_error", busy)
+
+    with pytest.raises(ConnectionError, match="^Z-Wave failed to start: database is locked$"):
+        await controller.start()
+
+
+async def test_the_runtime_starts_again_a_controller_whose_server_doesnt_answer(
+    controller: ZwaveController, tmp_path: Path
+):
+    server = Endpoint("zwave", "zwave-js-ws", f"ws://127.0.0.1:{free_port()}")  # nothing listens there
+    runtime = Runtime(tmp_path, [Pinned(server), controller], platform=controller.platform)
+    await runtime.start()
+    try:
+        await wait_until(lambda: runtime.status(controller).kind == StatusKind.RETRYING, 10, "the retry")
+        assert "unreachable" in runtime.status(controller).detail
+    finally:
+        await runtime.stop()
+
+
+async def test_stop_is_clean_without_a_connection(controller: ZwaveController, make_network: MakeNetwork):
+    await make_network(serve=False)
+    with pytest.raises(ConnectionError):
+        await controller.start()
     await controller.stop()
     await controller.stop()
+
+
+async def test_the_same_controller_started_again_keeps_nothing_of_its_last_run(
+    controller: ZwaveController, output: RecordingControllerOutput, make_network: MakeNetwork
+):
+    """The runtime starts the instance it stopped (a retry, a moved need), here on another stick without the device."""
+    network = await make_network()
+    await controller.start()
+    device = await pair(controller, output, network)
+    await controller.start_pairing_window(60, ProvidedCredentials(type=CredentialsType.code, value="12345"))
+    await controller.stop()
+
+    await make_network()
+    await controller.start()
+
+    # zwave-js-server asks every client for the PIN of an inclusion no client started: an old one would answer it
+    assert controller._credentials is None
+    with pytest.raises(ConnectionError):
+        await controller.fetch(device)
+    await asyncio.wait_for(controller.unpair(device), 1)  # gone: nothing to exclude
 
 
 async def test_a_device_excluded_elsewhere_is_lost_with_a_reason(
@@ -162,7 +312,7 @@ async def test_a_dead_device_that_then_leaves_says_it_left(
 
 
 async def test_another_device_reusing_a_node_id_is_not_taken_for_the_paired_one(
-    controller: ZwaveController, deps, output: RecordingControllerOutput, make_network
+    controller: ZwaveController, platform: Platform, output: RecordingControllerOutput, make_network: MakeNetwork
 ):
     network = await make_network()
     await controller.start()
@@ -173,7 +323,8 @@ async def test_another_device_reusing_a_node_id_is_not_taken_for_the_paired_one(
     # while the Hub was off, the device was replaced: another product now has node id 5
     await make_network([{"node": 5, "kind": "switch", "productId": 2}])
     output.connected_devices.clear()
-    again = ZwaveController(deps)
+    again = ZwaveController(platform)
+    again.peripherals, again.output = controller.peripherals, controller.output
     await again.start()
     try:
         assert device.id not in output.connected_devices

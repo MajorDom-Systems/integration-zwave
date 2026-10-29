@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
-from majordom_integration_sdk.controller import AbstractController
+from majordom_integration_sdk import Platform
 from majordom_integration_sdk.schemas import DeviceParameterChange
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import Device, Discovery, ProvidedCredentials
@@ -20,7 +20,7 @@ from tests.network import MockNetwork
 ROOM = UUID(int=42)
 
 
-async def wait_until(predicate: Callable[[], Any], timeout: float = 10.0, message: str = "condition") -> None:
+async def wait_until(predicate: Callable[[], Any], timeout: float = 10.0, message: str = "condition"):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -29,11 +29,9 @@ async def wait_until(predicate: Callable[[], Any], timeout: float = 10.0, messag
     raise TimeoutError(f"timed out after {timeout}s waiting for {message}")
 
 
-async def hub_creates_device(
-    deps: AbstractController.Dependencies, discovery: Discovery, name: str = "Hall lamp"
-) -> None:
+async def hub_creates_device(platform: Platform, discovery: Discovery, name: str = "Hall lamp"):
     """The Hub creates the device (name, room) before it asks to pair it (`DeviceProvider.create_device`)."""
-    async with deps.make_device_repository() as repo:
+    async with platform.make_device_repository(discovery.integration) as repo:
         await repo.save(
             Device(
                 id=discovery.id,
@@ -74,13 +72,13 @@ async def pair(
 ) -> ZwaveDevice:
     """Include a device and pair it as the Hub does; returns the stored device."""
     discovery = await discover(controller, output, network, node, kind, **options)
-    await hub_creates_device(controller.dependencies, discovery)
+    await hub_creates_device(controller.platform, discovery)
     device_id = await controller.pair_device(discovery, None)
     return await stored(controller, device_id or discovery.id)
 
 
 async def stored(controller: ZwaveController, device_id: UUID) -> ZwaveDevice:
-    async with controller.dependencies.make_device_repository() as repo:
+    async with controller.platform.device_repository(controller) as repo:
         device = await repo.get(device_id, as_=ZwaveDevice)
     assert device is not None, f"device {device_id} is not stored"
     return device
@@ -117,7 +115,7 @@ async def wait_for_value(
     return next(v for v in reversed(values(output, parameter.id)) if predicate(v))
 
 
-async def command(controller: ZwaveController, device: ZwaveDevice, parameter: ZwaveParameter, value: Any) -> None:
+async def command(controller: ZwaveController, device: ZwaveDevice, parameter: ZwaveParameter, value: Any):
     await controller.send_command(
         DeviceCommand(device_id=device.id, parameter_id=parameter.id, value=value), device, parameter
     )
@@ -132,7 +130,7 @@ PYTHON_TYPES: dict[ParameterDataType, tuple[type, ...]] = {
 }
 
 
-def assert_values_match_parameters(output: RecordingControllerOutput, device: ZwaveDevice) -> None:
+def assert_values_match_parameters(output: RecordingControllerOutput, device: ZwaveDevice):
     """Every reported value has the type its parameter declares, and lies within its limits."""
     by_id = {p.id: p for p in device.parameters}
     for change in changes(output):
