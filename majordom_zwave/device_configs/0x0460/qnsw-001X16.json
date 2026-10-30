@@ -1,5 +1,6 @@
-// MajorDom override of zwave-js's file (taken from its priority dir) until it is fixed upstream: firmware 10.13
-// takes parameter 120 as 4 bytes and resets only on 0x55555555 (the 1-byte value 1 is refused).
+// MajorDom override of zwave-js's file (taken from its priority dir): Shelly confirmed that firmware <= 10.13 and
+// 11.6-12.1 take parameter 120 as 4 bytes and reset only on 0x55555555 (the 1-byte value 1 is refused).
+// Remove once zwave-js ships #9364/#9425 and the zwave-js-server image digest is bumped.
 // Based on zwave-js (https://github.com/zwave-js/zwave-js), Copyright (c) 2018-2024 AlCalzone, MIT License.
 {
 	"manufacturer": "Shelly Europe Ltd.",
@@ -95,13 +96,10 @@
 		},
 		{
 			"#": "120",
-			"$if": "firmwareVersion < 13.0",
-			"label": "Factory Reset",
-			"description": "Reset to factory default settings and remove from the Z-Wave network.",
+			"$if": "firmwareVersion <= 10.13 || firmwareVersion >= 11.6 && firmwareVersion <= 12.1",
+			// Inlined #factory_reset_4_bytes of #9425, which the pinned zwave-js does not ship yet
+			"$import": "~/0x0460/templates/wave_template.json#factory_reset",
 			"valueSize": 4,
-			"unsigned": true,
-			"defaultValue": 0,
-			"allowManualEntry": false,
 			"options": [
 				{
 					"label": "Idle",
