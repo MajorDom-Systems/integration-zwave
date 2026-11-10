@@ -39,10 +39,10 @@ async def test_paired_devices_are_reconnected_after_a_restart(
 
     again = await restart(controller, platform)
     try:
-        assert device.id in output.connected_devices
+        assert device.physical_id in output.connected_devices
         await network.report(5, "switch", True)
         assert await wait_for_value(output, param(device, SWITCH), lambda v: v is True)
-        assert device.id not in again.discoveries  # paired, not offered again
+        assert device.physical_id not in again.discoveries  # paired, not offered again
     finally:
         await again.stop()
 
@@ -57,15 +57,15 @@ async def test_a_device_that_stops_answering_is_lost_and_found_again(
     await network.silence(5)
     with contextlib.suppress(ConnectionError):  # it does not answer
         await command(controller, device, switch, True)
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the device to be lost")
-    lost = await stored(controller, device.id)
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the device to be lost")
+    lost = await stored(controller, device.physical_id)
     assert lost.available is False
     assert lost.last_error
 
     output.connected_devices.clear()
     await network.revive(5)
-    await wait_until(lambda: device.id in output.connected_devices, 10, "the device to come back")
-    back = await stored(controller, device.id)
+    await wait_until(lambda: device.physical_id in output.connected_devices, 10, "the device to come back")
+    back = await stored(controller, device.physical_id)
     assert back.available is True
     assert back.last_error is None
 
@@ -78,14 +78,14 @@ async def test_a_dead_device_is_reported_unavailable_after_a_restart(
     await network.silence(5)
     with contextlib.suppress(ConnectionError):
         await command(controller, device, param(device, SWITCH), True)
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the device to be lost")
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the device to be lost")
     output.lost_devices.clear()
     output.connected_devices.clear()
 
     again = await restart(controller, platform)
     try:
-        assert device.id in output.lost_devices
-        assert device.id not in output.connected_devices
+        assert device.physical_id in output.lost_devices
+        assert device.physical_id not in output.connected_devices
     finally:
         await again.stop()
 
@@ -97,11 +97,11 @@ async def test_losing_the_server_loses_the_devices_and_it_reconnects_when_back(
     device = await pair(controller, output, network)
 
     await network.drop_server()
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the devices to be lost with the server")
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the devices to be lost with the server")
 
     output.connected_devices.clear()
     await network.serve()
-    await wait_until(lambda: device.id in output.connected_devices, 15, "the reconnection")
+    await wait_until(lambda: device.physical_id in output.connected_devices, 15, "the reconnection")
     await network.report(5, "switch", True)
     assert await wait_for_value(output, param(device, SWITCH), lambda v: v is True)
 
@@ -128,7 +128,7 @@ async def test_it_reconnects_though_reporting_the_lost_server_failed(
 
     output.connected_devices.clear()
     await network.serve()
-    await wait_until(lambda: device.id in output.connected_devices, 15, "the reconnection")
+    await wait_until(lambda: device.physical_id in output.connected_devices, 15, "the reconnection")
 
 
 def reported(output: RecordingControllerOutput) -> list[str]:
@@ -146,7 +146,7 @@ async def test_a_server_that_stays_lost_is_reported_until_it_is_back(
     device = await pair(controller, output, network)
 
     await network.drop_server()
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the devices to be lost with the server")
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the devices to be lost with the server")
     assert not output.errors  # one failed reconnect is no outage yet
     await wait_until(lambda: output.errors, 10, "the lost server to be reported")
     await asyncio.sleep(1.5)  # a few more failed reconnects
@@ -287,8 +287,8 @@ async def test_a_device_excluded_elsewhere_is_lost_with_a_reason(
         await other_tool.disconnect()
         listening.cancel()
 
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the excluded device to be lost")
-    assert (await stored(controller, device.id)).last_error
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the excluded device to be lost")
+    assert (await stored(controller, device.physical_id)).last_error
 
 
 async def test_a_dead_device_that_then_leaves_says_it_left(
@@ -300,15 +300,15 @@ async def test_a_dead_device_that_then_leaves_says_it_left(
     await network.silence(5)
     with contextlib.suppress(ConnectionError):
         await command(controller, device, param(device, SWITCH), True)
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the silent device to be lost")
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the silent device to be lost")
 
     await network.reset(5)
 
     for _ in range(100):
-        if "removed" in ((await stored(controller, device.id)).last_error or ""):
+        if "removed" in ((await stored(controller, device.physical_id)).last_error or ""):
             break
         await asyncio.sleep(0.1)
-    assert "removed" in ((await stored(controller, device.id)).last_error or "")
+    assert "removed" in ((await stored(controller, device.physical_id)).last_error or "")
 
 
 async def test_another_device_reusing_a_node_id_is_not_taken_for_the_paired_one(
@@ -327,8 +327,8 @@ async def test_another_device_reusing_a_node_id_is_not_taken_for_the_paired_one(
     again.peripherals, again.output = controller.peripherals, controller.output
     await again.start()
     try:
-        assert device.id not in output.connected_devices
-        assert device.id in output.lost_devices
-        assert (await stored(again, device.id)).last_error
+        assert device.physical_id not in output.connected_devices
+        assert device.physical_id in output.lost_devices
+        assert (await stored(again, device.physical_id)).last_error
     finally:
         await again.stop()

@@ -101,8 +101,8 @@ async def test_unpairing_a_smart_start_device_that_reset_itself_removes_its_prov
     device = await hub_pairs(controller, discovery)
 
     await network.reset(5)  # it left by itself: no node is left to remove
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the device to leave")
-    await controller.unpair(await stored(controller, device.id))
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the device to leave")
+    await controller.unpair(await stored(controller, device.physical_id))
 
     assert label["dsk"] not in await provisioned(network)  # or it would join again at its next power-up
 
@@ -119,6 +119,6 @@ async def test_a_smart_start_device_that_reset_itself_is_not_taken_back_in(
     device = await hub_pairs(controller, discovery)
 
     await network.reset(5)
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the device to leave")
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the device to leave")
 
     assert label["dsk"] not in await provisioned(network)

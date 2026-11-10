@@ -31,7 +31,7 @@ async def test_a_command_to_a_sleeping_device_waits_for_its_wake_up(
     await command(controller, device, switch, True)  # queued by zwave-js: no error, and not applied yet
 
     assert True not in values(output, switch.id)
-    assert (await stored(controller, device.id)).last_error is None
+    assert (await stored(controller, device.physical_id)).last_error is None
     await network.wake(5)
     assert await wait_for_value(output, switch, lambda v: v is True) is True
 
@@ -43,8 +43,8 @@ async def test_a_sleeping_device_is_not_lost(
     device = await pair(controller, output, network, 5, "sleeping")
     await wait_for_asleep(network)
 
-    assert device.id not in output.lost_devices
-    assert (await stored(controller, device.id)).available is True
+    assert device.physical_id not in output.lost_devices
+    assert (await stored(controller, device.physical_id)).available is True
 
 
 async def test_fetching_a_sleeping_device_is_not_a_failure(
@@ -56,7 +56,7 @@ async def test_fetching_a_sleeping_device_is_not_a_failure(
 
     await controller.fetch(device)
 
-    assert device.id not in output.lost_devices
+    assert device.physical_id not in output.lost_devices
 
 
 async def wait_for_asleep(network: MockNetwork, node: int = 5):

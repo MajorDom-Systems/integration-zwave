@@ -43,8 +43,8 @@ async def test_pairing_completes_the_device_the_hub_saved(
     assert device.integration_data is not None
     assert (device.integration_data.home_id, device.integration_data.node_id) == (HOME_ID, 5)
     assert device.parameters
-    assert device.id in output.connected_devices
-    assert device.id not in controller.discoveries
+    assert device.physical_id in output.connected_devices
+    assert device.physical_id not in controller.discoveries
 
 
 async def test_identity_is_derived_through_the_sdk_helpers(
@@ -54,9 +54,11 @@ async def test_identity_is_derived_through_the_sdk_helpers(
     device = await pair(controller, output, network)
 
     # the home id scopes the node id: node ids repeat across networks and are reused after a device leaves
-    assert device.id == controller.device_uuid(f"{HOME_ID:08x}-5")
+    assert device.physical_id == controller.device_uuid(f"{HOME_ID:08x}-5")
     for parameter in device.parameters:
-        assert parameter.id == controller.parameter_uuid(device.id, parameter.integration_data.value_id)
+        assert parameter.id == controller.parameter_uuid(
+            device.physical_id, parameter.integration_data.value_id, strip=""
+        )
 
 
 async def test_the_switch_is_one_parameter_and_the_main_one(
@@ -82,7 +84,7 @@ async def test_pair_device_fills_the_draft_and_changes_nothing_in_the_hub(
 
     paired = await controller.pair_device(discovery, hub_draft(discovery, "Porch"), None)
 
-    assert (paired.id, paired.name, paired.room_id) == (discovery.id, "Porch", ROOM)
+    assert (paired.physical_id, paired.name, paired.room_id) == (discovery.id, "Porch", ROOM)
     assert paired.integration_data is not None
     assert (paired.integration_data.home_id, paired.integration_data.node_id) == (HOME_ID, 5)
     assert paired.parameters
@@ -99,7 +101,8 @@ async def test_pair_device_refuses_an_id_another_record_holds(output: RecordingC
     store: dict[UUID, dict[str, Any]] = {}
     controller = ZwaveController(build_test_platform(store=store))
     controller.output = output
-    store[controller.device_uuid(f"{HOME_ID:08x}-5")] = {"name": "Old lamp"}  # paired: the default
+    held = controller.device_uuid(f"{HOME_ID:08x}-5")
+    store[UUID(int=7)] = {"name": "Old lamp", "physical_id": str(held)}  # paired: the default
     network = MockNetwork([])
     await network.start()
     controller.peripherals = Peripherals({"zwave": Endpoint("zwave", "zwave-js-ws", network.url)})
@@ -162,7 +165,7 @@ async def test_a_pairing_the_hub_never_saved_is_retried_from_the_same_discovery(
     assert discovery.id in controller.discoveries
     device = await hub_pairs(controller, controller.discoveries[discovery.id])
 
-    assert device.id == discovery.id and discovery.id not in controller.discoveries
+    assert device.physical_id == discovery.id and discovery.id not in controller.discoveries
     assert 5 in await network.node_ids()
 
 
@@ -248,13 +251,13 @@ async def test_fetch_after_the_save_binds_the_node_once(
     await controller.start()
     device = await pair(controller, output, network)
 
-    assert device.id in controller._nodes
-    subscriptions = list(controller._unsubscribe[device.id])
+    assert device.physical_id in controller._nodes
+    subscriptions = list(controller._unsubscribe[device.physical_id])
     await controller.fetch(device)
     await controller.fetch(device)
 
-    assert controller._unsubscribe[device.id] == subscriptions  # never a second subscription
-    assert device.id not in controller.discoveries
+    assert controller._unsubscribe[device.physical_id] == subscriptions  # never a second subscription
+    assert device.physical_id not in controller.discoveries
 
 
 async def test_a_pairing_window_opening_across_a_stop_is_refused(
@@ -371,7 +374,7 @@ async def test_a_paired_device_can_be_found_again_after_its_discovery(
     await controller.start()
     device = await pair(controller, output, network)
 
-    assert (await stored(controller, device.id)).id == device.id
+    assert (await stored(controller, device.physical_id)).id == device.id
     assert not output.lost_devices
 
 

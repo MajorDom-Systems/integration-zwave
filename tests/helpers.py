@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from majordom_integration_sdk.schemas import DeviceParameterChange
 from majordom_integration_sdk.schemas.command import DeviceCommand
@@ -31,7 +31,8 @@ async def wait_until(predicate: Callable[[], Any], timeout: float = 10.0, messag
 def hub_draft(discovery: Discovery, name: str = "Hall lamp") -> ZwaveDeviceState:
     """What the Hub builds before it asks to pair: the user's fields and the discovery's id, no record."""
     return ZwaveDeviceState(
-        id=discovery.id,
+        id=uuid4(),
+        physical_id=discovery.id,
         name=name,
         room_id=ROOM,
         transport=discovery.transport,
@@ -48,8 +49,8 @@ async def hub_pairs(
     paired = await controller.pair_device(discovery, draft or hub_draft(discovery, name), None)
     async with controller.platform.device_repository(controller) as repo:
         await repo.save(paired)
-    await controller.output.controller_did_connect_device(controller, paired.id)
-    device = await stored(controller, paired.id)
+    await controller.output.controller_did_connect_device(controller, paired.physical_id)
+    device = await stored(controller, paired.physical_id)
     await controller.fetch(device)
     return device
 
