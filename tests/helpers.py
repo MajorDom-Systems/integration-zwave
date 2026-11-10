@@ -6,15 +6,14 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
-from majordom_integration_sdk import Platform
 from majordom_integration_sdk.schemas import DeviceParameterChange
 from majordom_integration_sdk.schemas.command import DeviceCommand
-from majordom_integration_sdk.schemas.device import Device, Discovery, ProvidedCredentials
+from majordom_integration_sdk.schemas.device import Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.parameter import ParameterDataType
 from majordom_integration_sdk.testing import RecordingControllerOutput
 
 from majordom_zwave import ZwaveController
-from majordom_zwave.model import ZwaveDevice, ZwaveParameter
+from majordom_zwave.model import ZwaveDevice, ZwaveDeviceState, ZwaveParameter
 from tests.network import MockNetwork
 
 ROOM = UUID(int=42)
@@ -29,19 +28,30 @@ async def wait_until(predicate: Callable[[], Any], timeout: float = 10.0, messag
     raise TimeoutError(f"timed out after {timeout}s waiting for {message}")
 
 
-async def hub_creates_device(platform: Platform, discovery: Discovery, name: str = "Hall lamp"):
-    """The Hub creates the device (name, room) before it asks to pair it (`DeviceProvider.create_device`)."""
-    async with platform.make_device_repository(discovery.integration) as repo:
-        await repo.save(
-            Device(
-                id=discovery.id,
-                name=name,
-                room_id=ROOM,
-                transport=discovery.transport,
-                integration=discovery.integration,
-                manufacturer=discovery.device_manufacturer,
-            )
-        )
+def hub_draft(discovery: Discovery, name: str = "Hall lamp") -> ZwaveDeviceState:
+    """What the Hub builds before it asks to pair: the user's fields and the discovery's id, no record."""
+    return ZwaveDeviceState(
+        id=discovery.id,
+        name=name,
+        room_id=ROOM,
+        transport=discovery.transport,
+        integration=discovery.integration,
+        manufacturer=discovery.device_manufacturer,
+        parameters=[],
+    )
+
+
+async def hub_pairs(
+    controller: ZwaveController, discovery: Discovery, name: str = "Hall lamp", draft: ZwaveDeviceState | None = None
+) -> ZwaveDevice:
+    """Pairs as the Hub does: saves what `pair_device` returns, reports it connected, then fetches it."""
+    paired = await controller.pair_device(discovery, draft or hub_draft(discovery, name), None)
+    async with controller.platform.device_repository(controller) as repo:
+        await repo.save(paired)
+    await controller.output.controller_did_connect_device(controller, paired.id)
+    device = await stored(controller, paired.id)
+    await controller.fetch(device)
+    return device
 
 
 async def discover(
@@ -72,9 +82,7 @@ async def pair(
 ) -> ZwaveDevice:
     """Include a device and pair it as the Hub does; returns the stored device."""
     discovery = await discover(controller, output, network, node, kind, **options)
-    await hub_creates_device(controller.platform, discovery)
-    device_id = await controller.pair_device(discovery, None)
-    return await stored(controller, device_id or discovery.id)
+    return await hub_pairs(controller, discovery)
 
 
 async def stored(controller: ZwaveController, device_id: UUID) -> ZwaveDevice:

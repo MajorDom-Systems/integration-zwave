@@ -5,15 +5,15 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from majordom_integration_sdk.repository.memory import DeviceRepositoryMemory
-from majordom_integration_sdk.schemas.device import CredentialsType, Device, ProvidedCredentials
+from majordom_integration_sdk import DeviceIdTakenError, Endpoint, Peripherals
+from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.schemas.parameter import ParameterRole, ParameterVisibility
-from majordom_integration_sdk.testing import RecordingControllerOutput
+from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 from zwave_js_server.const import InclusionState
 from zwave_js_server.model.controller import Controller
 
 from majordom_zwave import ZwaveController
-from tests.helpers import ROOM, changes, discover, hub_creates_device, pair, param, stored, wait_until
+from tests.helpers import ROOM, discover, hub_draft, pair, param, stored, wait_until
 from tests.network import HOME_ID, MockNetwork
 
 BINARY_SWITCH = "37-0-targetValue"
@@ -31,7 +31,7 @@ async def test_a_device_included_in_the_pairing_window_is_discovered(
     assert discovery.id in controller.discoveries
 
 
-async def test_pairing_completes_the_device_the_hub_created(
+async def test_pairing_completes_the_device_the_hub_saved(
     controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
 ):
     await controller.start()
@@ -73,18 +73,63 @@ async def test_the_switch_is_one_parameter_and_the_main_one(
     assert switch.default_value is None  # a bool: a tap toggles it (a single value would be an always-on button)
 
 
-async def test_pairing_without_the_hub_device_fails_and_is_reported(
+async def test_pair_device_fills_the_draft_and_changes_nothing_in_the_hub(
     controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
 ):
     await controller.start()
     discovery = await discover(controller, output, network, 5, "switch")
+    events = len(output.events)
 
-    with pytest.raises(LookupError):
-        await controller.pair_device(discovery, None)
+    paired = await controller.pair_device(discovery, hub_draft(discovery, "Porch"), None)
 
-    assert output.updated_discoveries[-1].id == discovery.id
+    assert (paired.id, paired.name, paired.room_id) == (discovery.id, "Porch", ROOM)
+    assert paired.integration_data is not None
+    assert (paired.integration_data.home_id, paired.integration_data.node_id) == (HOME_ID, 5)
+    assert paired.parameters
+    assert paired.main_parameter
+    assert paired.available is True
+    async with controller.platform.device_repository(controller) as repo:
+        assert await repo.get(discovery.id) is None
+    assert discovery.id not in output.connected_devices
+    assert len(output.events) == events  # the Hub reports the device after it saved it
+    assert discovery.id in controller.discoveries  # a refused save leaves the node to pair again
+
+
+async def test_pair_device_refuses_an_id_another_record_holds(output: RecordingControllerOutput, fast: None):
+    store: dict[UUID, dict[str, Any]] = {}
+    controller = ZwaveController(build_test_platform(store=store))
+    controller.output = output
+    store[controller.device_uuid(f"{HOME_ID:08x}-5")] = {"name": "Old lamp"}  # paired: the default
+    network = MockNetwork([])
+    await network.start()
+    controller.peripherals = Peripherals({"zwave": Endpoint("zwave", "zwave-js-ws", network.url)})
+    try:
+        await controller.start()
+        discovery = await discover(controller, output, network, 5, "switch")
+        picked = hub_draft(discovery).model_copy(update={"id": UUID(int=9)})
+
+        with pytest.raises(DeviceIdTakenError) as taken:
+            await controller.pair_device(discovery, picked, None)
+
+        assert (taken.value.name, taken.value.is_paired) == ("Old lamp", True)
+        assert discovery.id in controller.discoveries
+        assert not output.updated_discoveries  # the id is not the device's fault
+    finally:
+        await controller.stop()
+        await network.stop()
+
+
+async def test_a_device_that_never_becomes_ready_fails_pairing_and_stays_discovered(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch", silent=True)  # joins, then never answers
+
+    with pytest.raises(TimeoutError):
+        await controller.pair_device(discovery, hub_draft(discovery), None)
+
     assert output.updated_discoveries[-1].last_error
-    assert discovery.id in controller.discoveries  # retryable
+    assert discovery.id in controller.discoveries
 
 
 async def test_pairing_an_unknown_discovery_fails(
@@ -95,21 +140,7 @@ async def test_pairing_an_unknown_discovery_fails(
     stale = discovery.model_copy(update={"id": controller.device_uuid("nothing")})
 
     with pytest.raises(ValueError):
-        await controller.pair_device(stale, None)
-
-
-async def test_a_device_that_never_becomes_ready_fails_pairing_and_stays_discovered(
-    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
-):
-    await controller.start()
-    discovery = await discover(controller, output, network, 5, "switch", silent=True)  # joins, then never answers
-    await hub_creates_device(controller.platform, discovery)
-
-    with pytest.raises(TimeoutError):
-        await controller.pair_device(discovery, None)
-
-    assert output.updated_discoveries[-1].last_error
-    assert discovery.id in controller.discoveries
+        await controller.pair_device(stale, hub_draft(stale), None)
 
 
 async def test_stopping_ends_a_pairing_that_waits_for_the_interview(
@@ -117,8 +148,7 @@ async def test_stopping_ends_a_pairing_that_waits_for_the_interview(
 ):
     await controller.start()
     discovery = await discover(controller, output, network, 5, "switch", silent=True)
-    await hub_creates_device(controller.platform, discovery)
-    pairing = asyncio.create_task(controller.pair_device(discovery, None))
+    pairing = asyncio.create_task(controller.pair_device(discovery, hub_draft(discovery), None))
     await asyncio.sleep(0.3)
 
     await controller.stop()
@@ -134,8 +164,7 @@ async def test_losing_the_server_ends_a_pairing_that_waits_for_the_interview(
     """The lost connection's node never hears the interview end (the next connection has nodes of its own)."""
     await controller.start()
     discovery = await discover(controller, output, network, 5, "switch", silent=True)
-    await hub_creates_device(controller.platform, discovery)
-    pairing = asyncio.create_task(controller.pair_device(discovery, None))
+    pairing = asyncio.create_task(controller.pair_device(discovery, hub_draft(discovery), None))
     await asyncio.sleep(0.3)
 
     await network.drop_server()
@@ -146,57 +175,45 @@ async def test_losing_the_server_ends_a_pairing_that_waits_for_the_interview(
     assert discovery.id in controller.discoveries
 
 
-async def test_a_pairing_that_outlives_a_stop_adopts_nothing(
+async def test_a_pairing_that_outlives_a_stop_returns_nothing(
     controller: ZwaveController,
     output: RecordingControllerOutput,
     network: MockNetwork,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Stopped while the Hub saves the device: refused, the Hub deletes the device it created, and the next start
-    offers the node again. Adopted, the stopped run's node would report the device connected, and serve it later."""
+    """Stopped while the node is read: refused, and the next start offers the node again."""
     await controller.start()
     discovery = await discover(controller, output, network, 5, "switch")
-    await hub_creates_device(controller.platform, discovery)
-    save = DeviceRepositoryMemory.save
-    saving = asyncio.Event()
+    reading = asyncio.Event()
 
-    async def slow_save(self: DeviceRepositoryMemory, device: Device, previous_id: UUID | None = None):
-        saving.set()
-        await asyncio.sleep(0.5)  # the Hub's SQLite, under load
-        await save(self, device, previous_id)
+    async def slow_read(node: Any) -> list[dict[str, Any]]:
+        reading.set()
+        await asyncio.sleep(0.5)
+        return []
 
-    monkeypatch.setattr(DeviceRepositoryMemory, "save", slow_save)
-    pairing = asyncio.create_task(controller.pair_device(discovery, None))
-    await saving.wait()
+    monkeypatch.setattr(controller, "_supported_notification_events", slow_read)
+    pairing = asyncio.create_task(controller.pair_device(discovery, hub_draft(discovery), None))
+    await reading.wait()
     await controller.stop()
-    reported = len(changes(output))
 
     with pytest.raises(ConnectionError, match="pair the device again"):
         await pairing
     assert discovery.id not in output.connected_devices
-    assert len(changes(output)) == reported
 
 
-async def test_a_pairing_whose_server_is_lost_while_the_hub_reads_says_why(
-    controller: ZwaveController,
-    output: RecordingControllerOutput,
-    network: MockNetwork,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_fetch_after_the_save_binds_the_node_once(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
 ):
     await controller.start()
-    discovery = await discover(controller, output, network, 5, "switch")
-    await hub_creates_device(controller.platform, discovery)
-    get = DeviceRepositoryMemory.get
+    device = await pair(controller, output, network)
 
-    async def get_while_the_server_drops(self: DeviceRepositoryMemory, device_id: UUID, as_: type[Device] = Device):
-        await network.drop_server()
-        await wait_until(lambda: controller._zwave_client is None, 10, "the connection to be let go")
-        return await get(self, device_id, as_)
+    assert device.id in controller._nodes
+    subscriptions = list(controller._unsubscribe[device.id])
+    await controller.fetch(device)
+    await controller.fetch(device)
 
-    monkeypatch.setattr(DeviceRepositoryMemory, "get", get_while_the_server_drops)
-    with pytest.raises(ConnectionError):
-        await controller.pair_device(discovery, None)
-    assert output.updated_discoveries[-1].last_error
+    assert controller._unsubscribe[device.id] == subscriptions  # never a second subscription
+    assert device.id not in controller.discoveries
 
 
 async def test_a_pairing_window_opening_across_a_stop_is_refused(

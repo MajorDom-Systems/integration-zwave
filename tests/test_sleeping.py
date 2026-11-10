@@ -47,6 +47,18 @@ async def test_a_sleeping_device_is_not_lost(
     assert (await stored(controller, device.id)).available is True
 
 
+async def test_fetching_a_sleeping_device_is_not_a_failure(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    await controller.start()
+    device = await pair(controller, output, network, 5, "sleeping")
+    await wait_for_asleep(network)
+
+    await controller.fetch(device)
+
+    assert device.id not in output.lost_devices
+
+
 async def wait_for_asleep(network: MockNetwork, node: int = 5):
     """zwave-js sends the device back to sleep once its interview is done."""
     for _ in range(100):
