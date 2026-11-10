@@ -88,7 +88,7 @@ async def pair(
 
 async def stored(controller: ZwaveController, device_id: UUID) -> ZwaveDevice:
     async with controller.platform.device_repository(controller) as repo:
-        device = await repo.get(device_id, as_=ZwaveDevice)
+        device = await repo.get(physical_id=device_id, as_=ZwaveDevice)
     assert device is not None, f"device {device_id} is not stored"
     return device
 

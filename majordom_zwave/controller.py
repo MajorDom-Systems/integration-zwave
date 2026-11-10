@@ -611,7 +611,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter, Any, Zwave
 
     async def _update_device(self, physical_id: UUID, **changes: Any):
         async with self.platform.device_repository(self) as repo:
-            device = await repo.get(physical_id, as_=ZwaveDevice)
+            device = await repo.get(physical_id=physical_id, as_=ZwaveDevice)
             if device is not None and any(getattr(device, k) != v for k, v in changes.items()):
                 await repo.save(device.model_copy(update=changes))
 

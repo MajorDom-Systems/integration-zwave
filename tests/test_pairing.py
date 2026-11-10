@@ -91,7 +91,7 @@ async def test_pair_device_fills_the_draft_and_changes_nothing_in_the_hub(
     assert paired.main_parameter
     assert paired.available is True
     async with controller.platform.device_repository(controller) as repo:
-        assert await repo.get(discovery.id) is None
+        assert await repo.get(physical_id=discovery.id) is None
     assert discovery.id not in output.connected_devices
     assert len(output.events) == events  # the Hub reports the device after it saved it
     assert discovery.id in controller.discoveries  # a refused save leaves the node to pair again
