@@ -11,7 +11,7 @@ from majordom_integration_sdk import STABLE_RUN, AbstractController, Integration
 from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
-from majordom_integration_sdk.schemas.parameter import ParameterRole
+from majordom_integration_sdk.schemas.parameter import ParameterRole, ParameterState
 from zwave_js_server.client import Client as ZwaveClient
 from zwave_js_server.const import (
     CommandClass,
@@ -30,6 +30,7 @@ from . import mapper
 from .model import (
     ZwaveDevice,
     ZwaveDeviceIntegrationData,
+    ZwaveDeviceState,
     ZwaveParameter,
     ZwaveParameterIntegrationData,
 )
@@ -60,7 +61,7 @@ class _Client(ZwaveClient):
             raise ConnectionError("the connection to zwave-js-server was lost") from None
 
 
-class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
+class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter, Any, ZwaveDeviceState]):
     """Bridges the Hub to Z-Wave devices through zwave-js-server."""
 
     needs = [Need("zwave", ["zwave-js-ws"])]
@@ -114,6 +115,11 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
     @override
     def device_type(self) -> type[ZwaveDevice]:
         return ZwaveDevice
+
+    @property
+    @override
+    def device_state_type(self) -> type[ZwaveDeviceState]:
+        return ZwaveDeviceState
 
     @property
     @override
@@ -341,20 +347,19 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
             self._closing_window.cancel()
         self._closing_window = self._spawn(self._close_pairing_window(duration_sec))
 
-    async def pair_device(self, discovery: Discovery, credentials: ProvidedCredentials | None) -> UUID:
+    async def pair_device(
+        self, discovery: Discovery, draft: ZwaveDeviceState, credentials: ProvidedCredentials | None
+    ) -> ZwaveDeviceState:
         known = self._discoveries.get(discovery.id)
         node = self._joined.get(discovery.id)
         if known is None or node is None:
             raise ValueError("Unknown device: it is no longer discovered")
+        await self.check_device_id(discovery.id, draft)
         connection = self._zwave_client  # the run token: the node is this connection's
         try:
             if credentials is not None and credentials.type != CredentialsType.none:
                 raise ValueError("Z-Wave credentials are given when opening the pairing window")
             await self._wait_until_ready(node)
-            async with self.platform.device_repository(self) as repo:
-                hub_device = await repo.get(discovery.id, as_=ZwaveDevice)  # the Hub creates it before pairing
-            if hub_device is None:
-                raise LookupError("The Hub has not created a device for this discovery")
 
             events = mapper.event_parameters(node, await self._supported_notification_events(node))
             parameters = self._build_parameters(discovery.id, node, events)
@@ -363,27 +368,8 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
             for parameter in parameters:
                 if main and parameter.id == main_id:
                     parameter.default_value = main[1]
-            device = hub_device.model_copy(
-                update={
-                    "parameters": parameters,
-                    "main_parameter": main_id
-                    if any(p.id == main_id and p.can_be_main_parameter for p in parameters)
-                    else None,
-                    "available": True,
-                    "last_error": None,
-                    "integration_data": ZwaveDeviceIntegrationData(
-                        home_id=self._controller().home_id or 0,
-                        node_id=node.node_id,
-                        fingerprint=self._fingerprint(node),
-                        dsk=node.dsk,
-                    ),
-                }
-            )
-            async with self.platform.device_repository(self) as repo:
-                await repo.save(device)
             if self._zwave_client is not connection:
-                # Stopped, restarted or reconnected meanwhile: refused, the Hub deletes the device it created, and the
-                # next connection offers the node again. Adopting it on the new connection may come later
+                # Stopped, restarted or reconnected meanwhile: refused, and the next connection offers the node again
                 raise ConnectionError("Z-Wave stopped or lost zwave-js-server while pairing: pair the device again")
             schema = "\n\t".join(
                 f"{p.role:8} {p.visibility:8} {p.data_type:8} {p.name} ({p.integration_data.value_id})"
@@ -398,19 +384,39 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                 await self.output.controller_did_update_discovery(self, failed)
             raise
 
-        self._discoveries.pop(discovery.id, None)
-        self._joined.pop(discovery.id, None)
-        self._bind(discovery.id, node, {event.value_id: event.valid_values for event in events})
-        await self._set_available(discovery.id, True)
-        await self._report_snapshot(discovery.id, node)
-        return discovery.id
+        # The node is bound, and the discovery given up, by fetch: the Hub has saved the device by then, so no value
+        # reaches it before the device exists
+        return draft.model_copy(
+            update={
+                "id": discovery.id,
+                "parameters": parameters,
+                "main_parameter": main_id
+                if any(p.id == main_id and p.can_be_main_parameter for p in parameters)
+                else None,
+                "available": True,
+                "last_error": None,
+                "integration_data": ZwaveDeviceIntegrationData(
+                    home_id=self._controller().home_id or 0,
+                    node_id=node.node_id,
+                    fingerprint=self._fingerprint(node),
+                    dsk=node.dsk,
+                ),
+            }
+        )
 
-    async def unpair(self, device: ZwaveDevice):
+    async def unpair(self, device: ZwaveDevice | ZwaveDeviceState):
+        """Also the rollback of a failed pairing, with a draft that may be bare: pairing here changes nothing on the
+        network (the device joined before it), so there is nothing to undo, and no exclusion is begun for it, which
+        needs the user at the device."""
         controller = self._controller()
+        if device.integration_data is None:
+            log.debug(f"[UNPAIR] {device.id} was never paired: nothing to undo")
+            self._unbind(device.id)
+            return
         node = self._nodes.get(device.id)
         if node is None:  # not on the network anymore: only a SmartStart entry may be left, it would join again
             data = device.integration_data
-            if data and data.dsk and await controller.async_get_provisioning_entry(data.dsk):
+            if data.dsk and await controller.async_get_provisioning_entry(data.dsk):
                 await controller.async_unprovision_smart_start_node(data.dsk)
             self._unbind(device.id)
             return
@@ -487,7 +493,22 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         log.debug(f"[IDENTIFY] node_id={node.node_id} blinked")
 
     async def fetch(self, device: ZwaveDevice):
-        await self._report_snapshot(device.id, self._require_node(device))
+        node = self._nodes.get(device.id) or self._adoptable(device)
+        if node is None:
+            raise ConnectionError(f"Device {device.name} is not connected")
+        if device.id not in self._unsubscribe:  # just paired, or its subscription is gone: never subscribed twice
+            self._available.setdefault(device.id, device.available)  # the Hub's own record of it
+            self._joined.pop(device.id, None)
+            self._discoveries.pop(device.id, None)
+            events = {
+                p.integration_data.value_id: p.valid_values
+                for p in device.parameters
+                if p.integration_data.value_id not in node.values  # an event parameter (of a notification)
+            }
+            self._bind(device.id, node, events)
+        await self._update_availability(device.id, node)
+        if node.status != NodeStatus.DEAD:  # a sleeping node answers from what it last reported
+            await self._report_snapshot(device.id, node)
 
     async def send_command(self, command: DeviceCommand, device: ZwaveDevice, parameter: ZwaveParameter):
         node = self._nodes.get(device.id)
@@ -572,6 +593,14 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
         node = self._nodes.get(device.id)
         if node is None:
             raise ConnectionError(f"Device {device.name} is not connected")
+        return node
+
+    def _adoptable(self, device: ZwaveDevice) -> Node | None:
+        """The node a just paired device (not bound yet) is on: the one it was offered as."""
+        node = self._joined.get(device.id)
+        data = device.integration_data
+        if node is None and data is not None and data.home_id == self._controller().home_id:
+            node = self._controller().nodes.get(data.node_id)
         return node
 
     def _parameter_id(self, device_id: UUID, value_id: str) -> UUID:
@@ -673,14 +702,14 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
 
     def _build_parameters(
         self, device_id: UUID, node: Node, events: list[mapper.EventParameter]
-    ) -> list[ZwaveParameter]:
+    ) -> list[ParameterState[ZwaveParameterIntegrationData]]:
         """The device's parameters; their values reach the Hub as events (the snapshot after pairing)."""
-        parameters: list[ZwaveParameter] = []
+        parameters: list[ParameterState[ZwaveParameterIntegrationData]] = []
         pairs = mapper.parameter_values(node)
         for (value, state), name in zip(pairs, mapper.names(pairs), strict=True):
             low, high, step = mapper.limits(value)
             parameters.append(
-                ZwaveParameter(
+                ParameterState[ZwaveParameterIntegrationData](
                     id=self._parameter_id(device_id, value.value_id),
                     name=name,
                     data_type=mapper.data_type(value),
@@ -697,7 +726,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter]):
                 )
             )
         parameters += [
-            ZwaveParameter(
+            ParameterState[ZwaveParameterIntegrationData](
                 id=self._parameter_id(device_id, event.value_id),
                 name=event.name,
                 data_type=event.data_type,
