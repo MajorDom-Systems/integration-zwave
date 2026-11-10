@@ -7,7 +7,7 @@ from majordom_integration_sdk.testing import RecordingControllerOutput
 from zwave_js_server.const import InclusionState
 
 from majordom_zwave import ZwaveController
-from tests.helpers import discover, hub_draft, pair, stored
+from tests.helpers import pair, stored
 from tests.network import MockNetwork
 
 
@@ -21,20 +21,6 @@ async def test_a_failed_device_is_removed_without_the_device(
     await controller.unpair(device)
 
     assert 5 not in await network.node_ids()
-
-
-async def test_rolling_back_a_bare_draft_waits_for_nobody_and_leaves_the_node(
-    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
-):
-    """The Hub's rollback of a failed pairing: the node joined before it, and leaving needs the user at the device."""
-    await controller.start()
-    discovery = await discover(controller, output, network, 5, "switch")
-
-    await asyncio.wait_for(controller.unpair(hub_draft(discovery)), 1)
-
-    assert 5 in await network.node_ids()
-    assert controller._controller().inclusion_state == InclusionState.IDLE
-    assert discovery.id in controller.discoveries  # still offered: the pairing can be retried
 
 
 async def test_a_live_device_is_removed_once_it_confirms_the_exclusion(

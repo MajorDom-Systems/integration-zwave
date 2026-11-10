@@ -13,7 +13,7 @@ from zwave_js_server.const import InclusionState
 from zwave_js_server.model.controller import Controller
 
 from majordom_zwave import ZwaveController
-from tests.helpers import ROOM, discover, hub_draft, pair, param, stored, wait_until
+from tests.helpers import ROOM, discover, hub_draft, hub_pairs, pair, param, stored, wait_until
 from tests.network import HOME_ID, MockNetwork
 
 BINARY_SWITCH = "37-0-targetValue"
@@ -130,6 +130,47 @@ async def test_a_device_that_never_becomes_ready_fails_pairing_and_stays_discove
 
     assert output.updated_discoveries[-1].last_error
     assert discovery.id in controller.discoveries
+
+
+async def test_a_failed_pairing_is_retried_from_the_same_discovery(
+    controller: ZwaveController,
+    output: RecordingControllerOutput,
+    network: MockNetwork,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch")
+    with monkeypatch.context() as patched:
+        patched.setattr(controller, "_wait_until_ready", _raise(TimeoutError("not ready")))
+        with pytest.raises(TimeoutError):
+            await controller.pair_device(discovery, hub_draft(discovery), None)
+
+    assert 5 in await network.node_ids()  # nothing undone: it stays included
+    assert controller._controller().inclusion_state == InclusionState.IDLE  # no exclusion begun
+    device = await hub_pairs(controller, controller.discoveries[discovery.id])
+    assert device.parameters and discovery.id not in controller.discoveries
+
+
+async def test_a_pairing_the_hub_never_saved_is_retried_from_the_same_discovery(
+    controller: ZwaveController, output: RecordingControllerOutput, network: MockNetwork
+):
+    await controller.start()
+    discovery = await discover(controller, output, network, 5, "switch")
+    await controller.pair_device(discovery, hub_draft(discovery), None)
+    # the Hub refused the id or failed to save: nothing saved, nothing undone
+
+    assert discovery.id in controller.discoveries
+    device = await hub_pairs(controller, controller.discoveries[discovery.id])
+
+    assert device.id == discovery.id and discovery.id not in controller.discoveries
+    assert 5 in await network.node_ids()
+
+
+def _raise(error: Exception):
+    async def fail(*_args: Any):
+        raise error
+
+    return fail
 
 
 async def test_pairing_an_unknown_discovery_fails(

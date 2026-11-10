@@ -405,12 +405,11 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter, Any, Zwave
         )
 
     async def unpair(self, device: ZwaveDevice | ZwaveDeviceState):
-        """Also the rollback of a failed pairing, with a draft that may be bare: pairing here changes nothing on the
-        network (the device joined before it), so there is nothing to undo, and no exclusion is begun for it, which
-        needs the user at the device."""
+        """The user's unpair only. A failed or unsaved pairing needs no undo: pairing here changes nothing on the
+        network (the device joined before it), and its discovery stays offered until fetch, so it is retried as is."""
         controller = self._controller()
         if device.integration_data is None:
-            log.debug(f"[UNPAIR] {device.id} was never paired: nothing to undo")
+            log.debug(f"[UNPAIR] {device.id} was never paired: nothing to remove")
             self._unbind(device.id)
             return
         node = self._nodes.get(device.id)
