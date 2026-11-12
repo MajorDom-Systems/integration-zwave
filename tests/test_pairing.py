@@ -159,9 +159,12 @@ async def test_a_pairing_the_hub_never_saved_is_retried_from_the_same_discovery(
 ):
     await controller.start()
     discovery = await discover(controller, output, network, 5, "switch")
-    await controller.pair_device(discovery, hub_draft(discovery), None)
-    # the Hub refused the id or failed to save: nothing saved, nothing undone
+    draft = await controller.pair_device(discovery, hub_draft(discovery), None)
+    # the Hub failed to save it, and rolled it back, twice: nothing undone
+    await controller.unpair(draft)
+    await controller.unpair(draft)
 
+    assert controller._controller().inclusion_state == InclusionState.IDLE  # no exclusion begun
     assert discovery.id in controller.discoveries
     device = await hub_pairs(controller, controller.discoveries[discovery.id])
 
