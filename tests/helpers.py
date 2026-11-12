@@ -49,7 +49,7 @@ async def hub_pairs(
     paired = await controller.pair_device(discovery, draft or hub_draft(discovery, name), None)
     async with controller.platform.device_repository(controller) as repo:
         await repo.save(paired)
-    await controller.output.controller_did_connect_device(controller, paired.physical_id)
+    await controller.output.controller_did_connect_device(controller, physical_id=paired.physical_id)
     device = await stored(controller, paired.physical_id)
     await controller.fetch(device)
     return device

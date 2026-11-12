@@ -7,7 +7,15 @@ from typing import Any, ClassVar, override
 from uuid import UUID
 
 from aiohttp import ClientSession
-from majordom_integration_sdk import STABLE_RUN, AbstractController, IntegrationError, Need, NoSettings, Platform
+from majordom_integration_sdk import (
+    STABLE_RUN,
+    AbstractController,
+    DeviceUnreachableError,
+    IntegrationError,
+    Need,
+    NoSettings,
+    Platform,
+)
 from majordom_integration_sdk.schemas import DeviceCommand, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.device import CredentialsType, NonEmptyStr
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
@@ -420,7 +428,7 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter, Any, Zwave
             return
         # A SmartStart device stays provisioned unless removed from the list: it would join again when powered on
         provisioning = await controller.async_get_provisioning_entry(node.node_id)
-        if await controller.async_is_failed_node(node):
+        if failed := await controller.async_is_failed_node(node):
             await controller.async_remove_failed_node(node)
         else:
             # A live node leaves only when the device itself confirms (its button, per the manufacturer)
@@ -450,6 +458,8 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter, Any, Zwave
             await controller.async_unprovision_smart_start_node(provisioning.dsk)
         self._unbind(device.physical_id)
         self._available.pop(device.physical_id, None)
+        if failed:  # it still believes it is included: it must be excluded or reset before it joins again
+            raise DeviceUnreachableError(f"Node {node.node_id} is unreachable to exclude")
 
     async def identify(self, device: ZwaveDevice):
         node = self._require_node(device)
@@ -821,9 +831,9 @@ class ZwaveController(AbstractController[ZwaveDevice, ZwaveParameter, Any, Zwave
         self._available[physical_id] = available
         await self._update_device(physical_id, available=available, last_error=None if available else reason)
         if available:
-            await self.output.controller_did_connect_device(self, physical_id)
+            await self.output.controller_did_connect_device(self, physical_id=physical_id)
         else:
-            await self.output.controller_did_lose_device(self, physical_id)
+            await self.output.controller_did_lose_device(self, physical_id=physical_id)
 
     async def _value_updated(self, physical_id: UUID, value: Value):
         routes = self._routes.get(physical_id, {})

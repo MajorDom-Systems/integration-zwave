@@ -117,10 +117,10 @@ async def test_it_reconnects_though_reporting_the_lost_server_failed(
     lose_device = output.controller_did_lose_device
     failures = [sqlite3.OperationalError("database is locked")]  # the Hub's store, busy once
 
-    async def busy_once(controller: ZwaveController, device_id: UUID):
+    async def busy_once(controller: ZwaveController, *, physical_id: UUID):
         if failures:
             raise failures.pop()
-        await lose_device(controller, device_id)
+        await lose_device(controller, physical_id=physical_id)
 
     monkeypatch.setattr(output, "controller_did_lose_device", busy_once)
     await network.drop_server()

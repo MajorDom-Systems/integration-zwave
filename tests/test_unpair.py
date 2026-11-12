@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from majordom_integration_sdk import DeviceUnreachableError
 from majordom_integration_sdk.testing import RecordingControllerOutput
 from zwave_js_server.const import InclusionState
 
@@ -18,7 +19,8 @@ async def test_a_failed_device_is_removed_without_the_device(
     device = await pair(controller, output, network)
     await network.fail(5)
 
-    await controller.unpair(device)
+    with pytest.raises(DeviceUnreachableError):
+        await controller.unpair(device)
 
     assert 5 not in await network.node_ids()
 
