@@ -1,4 +1,5 @@
 from majordom_integration_sdk.schemas import Device, Parameter
+from majordom_integration_sdk.schemas.device import DeviceState
 from pydantic import BaseModel, Field
 
 
@@ -15,8 +16,12 @@ class ZwaveParameterIntegrationData(BaseModel):
     state_value_id: str | None = None  # the value the state is read from, when it is another one (current vs target)
 
 
-class ZwaveDevice(Device[ZwaveDeviceIntegrationData | None]):  # None until paired: the Hub creates the device first
+class ZwaveDevice(Device[ZwaveDeviceIntegrationData | None]):  # None for a record that is not paired
     parameters: list["ZwaveParameter"] = Field(default_factory=list)
+
+
+class ZwaveDeviceState(DeviceState[ZwaveDeviceIntegrationData | None, ZwaveParameterIntegrationData]):
+    """The pairing draft: what the Hub knows of the device before it exists, filled in by `pair_device`."""
 
 
 class ZwaveParameter(Parameter[ZwaveParameterIntegrationData]):

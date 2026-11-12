@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from majordom_integration_sdk import DeviceUnreachableError
 from majordom_integration_sdk.testing import RecordingControllerOutput
 from zwave_js_server.const import InclusionState
 
@@ -18,7 +19,8 @@ async def test_a_failed_device_is_removed_without_the_device(
     device = await pair(controller, output, network)
     await network.fail(5)
 
-    await controller.unpair(device)
+    with pytest.raises(DeviceUnreachableError):
+        await controller.unpair(device)
 
     assert 5 not in await network.node_ids()
 
@@ -50,7 +52,7 @@ async def test_stopping_ends_an_unpairing_that_waits_for_the_device(
 
     with pytest.raises(ConnectionError):  # at once, not when the exclusion times out
         await asyncio.wait_for(unpairing, 1)
-    assert (await stored(controller, device.id)).last_error is None  # no button to press any more
+    assert (await stored(controller, device.physical_id)).last_error is None  # no button to press any more
 
     await controller.start()  # on the same server, which outlived the controller
     assert controller._controller().inclusion_state == InclusionState.IDLE  # the next button pressed removes nothing
@@ -69,7 +71,7 @@ async def test_excluding_another_device_does_not_count_as_removing_this_one(
 
     with pytest.raises(LookupError, match="another device"):
         await asyncio.wait_for(unpairing, 10)
-    assert other.id in output.lost_devices
+    assert other.physical_id in output.lost_devices
     assert 5 in await network.node_ids()
 
 
@@ -82,6 +84,6 @@ async def test_an_unconfirmed_exclusion_times_out_with_a_reason(
     with pytest.raises(TimeoutError):
         await controller.unpair(device)
 
-    assert (await stored(controller, device.id)).last_error
+    assert (await stored(controller, device.physical_id)).last_error
     assert 5 in await network.node_ids()
     await controller.start_pairing_window(1)  # the exclusion was stopped: inclusion can start

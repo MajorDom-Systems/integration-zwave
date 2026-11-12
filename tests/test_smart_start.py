@@ -8,7 +8,7 @@ from majordom_integration_sdk.testing import RecordingControllerOutput
 from zwave_js_server.client import Client
 
 from majordom_zwave import ZwaveController
-from tests.helpers import hub_creates_device, param, stored, wait_until
+from tests.helpers import hub_pairs, param, stored, wait_until
 from tests.network import MockNetwork
 
 SWITCH = "37-0-targetValue"
@@ -47,8 +47,7 @@ async def test_a_provisioned_device_joins_when_powered_on_and_pairs_securely(
     await wait_until(lambda: output.received_discoveries, 20, "the device to join")
     discovery = output.received_discoveries[-1]
     assert discovery.last_error is None  # S2 from its QR code: no PIN needed
-    await hub_creates_device(controller.platform, discovery)
-    device = await stored(controller, await controller.pair_device(discovery, None))
+    device = await hub_pairs(controller, discovery)
 
     param(device, SWITCH)  # only supported securely: present only if S2 bootstrapping succeeded
 
@@ -72,8 +71,7 @@ async def test_unpairing_a_smart_start_device_removes_its_provisioning(
     await network.power_on(5)
     await wait_until(lambda: output.received_discoveries, 20, "the device to join")
     discovery = output.received_discoveries[-1]
-    await hub_creates_device(controller.platform, discovery)
-    device = await stored(controller, await controller.pair_device(discovery, None))
+    device = await hub_pairs(controller, discovery)
 
     unpairing = asyncio.create_task(controller.unpair(device))
     await asyncio.sleep(0.3)
@@ -100,12 +98,11 @@ async def test_unpairing_a_smart_start_device_that_reset_itself_removes_its_prov
     await network.power_on(5)
     await wait_until(lambda: output.received_discoveries, 20, "the device to join")
     discovery = output.received_discoveries[-1]
-    await hub_creates_device(controller.platform, discovery)
-    device = await stored(controller, await controller.pair_device(discovery, None))
+    device = await hub_pairs(controller, discovery)
 
     await network.reset(5)  # it left by itself: no node is left to remove
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the device to leave")
-    await controller.unpair(await stored(controller, device.id))
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the device to leave")
+    await controller.unpair(await stored(controller, device.physical_id))
 
     assert label["dsk"] not in await provisioned(network)  # or it would join again at its next power-up
 
@@ -119,10 +116,9 @@ async def test_a_smart_start_device_that_reset_itself_is_not_taken_back_in(
     await network.power_on(5)
     await wait_until(lambda: output.received_discoveries, 20, "the device to join")
     discovery = output.received_discoveries[-1]
-    await hub_creates_device(controller.platform, discovery)
-    device = await stored(controller, await controller.pair_device(discovery, None))
+    device = await hub_pairs(controller, discovery)
 
     await network.reset(5)
-    await wait_until(lambda: device.id in output.lost_devices, 10, "the device to leave")
+    await wait_until(lambda: device.physical_id in output.lost_devices, 10, "the device to leave")
 
     assert label["dsk"] not in await provisioned(network)

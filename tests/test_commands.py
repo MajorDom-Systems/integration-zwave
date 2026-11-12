@@ -53,7 +53,7 @@ async def test_a_failed_command_is_surfaced_and_not_reported_as_applied(
         await command(controller, device, switch, True)
 
     assert True not in values(output, switch.id)
-    assert (await stored(controller, device.id)).last_error
+    assert (await stored(controller, device.physical_id)).last_error
 
 
 async def test_a_command_cut_short_by_the_lost_server_fails_with_a_reason(
@@ -86,7 +86,7 @@ async def test_a_command_the_device_refuses_is_surfaced_and_not_reported_as_appl
         await command(controller, device, switch, True)
 
     assert True not in values(output, switch.id)
-    assert (await stored(controller, device.id)).last_error
+    assert (await stored(controller, device.physical_id)).last_error
 
 
 async def test_a_successful_command_clears_the_last_error(
@@ -102,7 +102,7 @@ async def test_a_successful_command_clears_the_last_error(
     await network.revive(5)
     await command(controller, device, switch, True)
 
-    assert (await stored(controller, device.id)).last_error is None
+    assert (await stored(controller, device.physical_id)).last_error is None
 
 
 async def test_a_read_only_parameter_cannot_be_commanded(
