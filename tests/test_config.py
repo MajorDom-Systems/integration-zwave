@@ -34,9 +34,9 @@ def test_the_network_keys_are_write_only():
 
 
 @pytest.mark.parametrize("listen_address", ["127.0.0.1", "0.0.0.0"])  # the Hub only, or a lab harness on the LAN
-@pytest.mark.parametrize(("region", "rendered"), [("Europe", "Europe"), (None, "")])  # none: the stick keeps its own
+@pytest.mark.parametrize(("region", "rendered"), [("Europe", "Europe"), (None, None)])  # none: left out, the stick keeps its own
 async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(
-    tmp_path: Path, region: str | None, rendered: str, listen_address: str
+    tmp_path: Path, region: str | None, rendered: str | None, listen_address: str
 ):
     platform = build_test_platform(tmp_path / "peripherals", region=region)
     stick = Endpoint("zwave", "serial-api", "/dev/serial/by-id/usb-0658_0200-if00")
@@ -51,7 +51,7 @@ async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(
         compose = json.loads((tmp_path / "peripherals" / "compose" / "compose.json").read_text())
         container = compose["services"]["zwave-js-server"]
         assert container["devices"] == [f"{stick.url}:/dev/zwave"]
-        assert container["environment"]["RF_REGION"] == rendered
+        assert container["environment"].get("RF_REGION") == rendered
         port = container["command"][container["command"].index("--port") + 1]
         assert controller.peripherals.endpoint("zwave").url == f"ws://127.0.0.1:{port}"
         # on the host network, unauthenticated: anyone on the LAN could drive the stick (unlock doors, wipe it)
