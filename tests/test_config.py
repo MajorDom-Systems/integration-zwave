@@ -34,7 +34,8 @@ def test_the_network_keys_are_write_only():
 
 
 @pytest.mark.parametrize("listen_address", ["127.0.0.1", "0.0.0.0"])  # the Hub only, or a lab harness on the LAN
-@pytest.mark.parametrize(("region", "rendered"), [("Europe", "Europe"), (None, None)])  # none: left out, the stick keeps its own
+# none: left out, the stick keeps its own
+@pytest.mark.parametrize(("region", "rendered"), [("Europe", "Europe"), (None, None)])
 async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(
     tmp_path: Path, region: str | None, rendered: str | None, listen_address: str
 ):
