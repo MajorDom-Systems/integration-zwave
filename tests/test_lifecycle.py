@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
@@ -45,6 +46,11 @@ async def test_paired_devices_are_reconnected_after_a_restart(
         assert device.physical_id not in again.discoveries  # paired, not offered again
     finally:
         await again.stop()
+
+
+async def test_a_new_rf_region_leaves_the_controller_running(controller: ZwaveController, platform: Platform):
+    """The region is the server's: its container is recreated by the runtime, and the controller reconnects to it."""
+    assert await controller.platform_facts_did_change(replace(platform, region="Europe"))
 
 
 async def test_a_device_that_stops_answering_is_lost_and_found_again(
