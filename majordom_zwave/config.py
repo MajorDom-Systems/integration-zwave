@@ -36,7 +36,7 @@ def zwave_js_server() -> Service[ZwaveNetwork]:
     """One for each runtime, which keeps on it what it is bound to and its settings."""
     return Service(
         "zwave-js-server",
-        needs=[Need("zwave", ["serial-api"])],
+        needs=[Need("zwave", ["zwave-serial-api"])],
         provides=[Endpoint("zwave", "zwave-js-ws", "ws://127.0.0.1:{ports.api}")],
         ports={"api": 3000},
         settings=ZwaveNetwork,
