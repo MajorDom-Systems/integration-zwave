@@ -40,7 +40,7 @@ async def test_runs_on_the_stick_in_the_hubs_region_for_the_controller(
     tmp_path: Path, region: str | None, rendered: str | None, listen_address: str
 ):
     platform = build_test_platform(tmp_path / "peripherals", region=region)
-    stick = Endpoint("zwave", "serial-api", "/dev/serial/by-id/usb-0658_0200-if00")
+    stick = Endpoint("zwave", "zwave-serial-api", "/dev/serial/by-id/usb-0658_0200-if00")
     exported = majordom_zwave.peripherals(platform)
     [controller] = [peripheral for peripheral in exported if isinstance(peripheral, ZwaveController)]
     runtime = Runtime(tmp_path, [Pinned(stick), FakeCompose(listen_address), *exported], platform=platform)
